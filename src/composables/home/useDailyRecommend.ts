@@ -1,5 +1,5 @@
 import type { Track } from "@shared/types/player";
-import { useUserStore } from "@/stores/user";
+import { useAccountStore } from "@/stores/account";
 import { useDataStore } from "@/stores/data";
 import { toast } from "@/composables/useToast";
 import * as player from "@/core/player";
@@ -50,7 +50,7 @@ const toSource = (kind: HeroKind, tracks: Track[]): HeroSource | null =>
  */
 export const useDailyRecommend = () => {
   const { t } = useI18n();
-  const user = useUserStore();
+  const user = useAccountStore();
   const data = useDataStore();
 
   const slide = shallowRef<HeroSource | null>(null);
@@ -93,15 +93,26 @@ export const useDailyRecommend = () => {
     }
   };
 
+  let generation = 0;
+  onScopeDispose(() => {
+    generation++;
+  });
+
   /** 随机来源展示，无内容则顺延下一种 */
   const load = async (): Promise<void> => {
+    const epoch = ++generation;
+    slide.value = null;
     loading.value = true;
     const kinds: HeroKind[] = ["local"];
-    if (user.isLoggedIn) kinds.push("daily");
+    if (user.platform === "netease" && user.isLoggedIn) kinds.push("daily");
     if (user.likedPlaylistTracks.length > 0) kinds.push("liked");
-    const start = randomIndex(kinds.length);
+    const start =
+      user.platform === "qqmusic" && kinds.includes("liked")
+        ? kinds.indexOf("liked")
+        : randomIndex(kinds.length);
     for (let offset = 0; offset < kinds.length; offset++) {
       const built = await tryBuild(kinds[(start + offset) % kinds.length]);
+      if (epoch !== generation) return;
       if (built) {
         slide.value = built;
         break;
@@ -109,6 +120,14 @@ export const useDailyRecommend = () => {
     }
     loading.value = false;
   };
+
+  watch(
+    () => [user.platform, user.profile?.userId, user.likedPlaylistTracks],
+    () => {
+      void load();
+    },
+    { flush: "sync" },
+  );
 
   /** 立即播放：从代表曲目起播整组 */
   const playAll = async (): Promise<void> => {

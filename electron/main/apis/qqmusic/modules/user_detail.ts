@@ -4,7 +4,7 @@
  * 通过 music.UserInfo.userInfoServer / GetLoginUserInfo 获取用户信息
  */
 
-import { clearQQMusicCookies, getQQMusicCookies, getQQMusicUin, qmRequest } from "../core/request";
+import { getQQMusicCookies, getQQMusicUin, qmRequest } from "../core/request";
 import { normalizeQQMusicVip, type QQMusicVipData } from "../core/vip";
 import { coreLog } from "@main/utils/logger";
 import type { QMModule } from "../core/types";
@@ -69,18 +69,7 @@ const userDetail: QMModule = async (_params) => {
   }
 
   const [creator, vipData] = await Promise.all([fetchCgiProfile(), fetchVipStatus()]);
-
-  // 若接口双双彻底失败（说明凭据已过期且自动续期失败）
-  if (!creator && !vipData) {
-    coreLog.warn("[qm-user-detail] 凭据已失效，清除 QM 会话");
-    clearQQMusicCookies();
-    return {
-      code: 301,
-      loggedIn: false,
-      message: "QM 登录已过期，请重新登录",
-    };
-  }
-
+  if (!creator && !vipData) throw new Error("QQ 音乐账号校验失败，请检查网络或重新登录");
   const avatarUrl = creator?.headpic?.replace(/^http:\/\//, "https://");
   const nickname = creator?.nick || "";
   const vip = normalizeQQMusicVip(vipData);
@@ -94,6 +83,8 @@ const userDetail: QMModule = async (_params) => {
       avatarUrl: avatarUrl || "",
       isVip: vip.isVip,
       vipLevel: vip.vipLevel,
+      level: vip.level,
+      membershipType: vip.membershipType,
     },
   };
 };

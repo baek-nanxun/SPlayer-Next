@@ -1,6 +1,6 @@
 import type { Track } from "@shared/types/player";
 import type { ContentScope } from "@/types/collection";
-import { useUserStore } from "@/stores/user";
+import { useAccountStore } from "@/stores/account";
 import { toast } from "@/composables/useToast";
 
 /**
@@ -8,7 +8,7 @@ import { toast } from "@/composables/useToast";
  * 在线歌曲未登录时拦截并提示，不打开弹窗
  */
 export const usePlaylistPicker = () => {
-  const user = useUserStore();
+  const user = useAccountStore();
   const { t } = useI18n();
 
   /** 弹窗开关 */
@@ -24,7 +24,14 @@ export const usePlaylistPicker = () => {
    */
   const openPicker = (items: Track[]): void => {
     if (items.length === 0) return;
-    const scope: ContentScope = items[0].source === "netease" ? "online" : "local";
+    if (
+      items.some((item) => item.source !== items[0].source) ||
+      (items[0].source !== "local" && items[0].source !== user.platform)
+    ) {
+      toast.warning(t("login.platformMismatch"));
+      return;
+    }
+    const scope: ContentScope = items[0].source !== "local" ? "online" : "local";
     if (scope === "online" && !user.isLoggedIn) {
       toast.warning(t("liked.toast.needLogin"));
       return;

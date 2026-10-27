@@ -54,6 +54,50 @@ describe("QQ 搜索签名请求", () => {
     expect(init.headers.Cookie).toBe("uin=123456; qm_keyst=saved-key");
   });
 
+  it("官方房间使用 musicu 的 _ 签名，原搜索仍使用 musics", async () => {
+    await qmRequest(
+      "music.lightUGCRoom.LightUGCRoomSvr",
+      "LightUGCRoomHeartBeat",
+      { showID: "LUGC123" },
+      { appGateway: true, session: false, retry: false },
+    );
+    const [rawUrl, init] = fetchMock.mock.calls[0];
+    const url = new URL(rawUrl);
+    expect(url.pathname).toBe("/cgi-bin/musicu.fcg");
+    expect(url.searchParams.get("_")).toMatch(/^zzc[a-z0-9]+$/);
+    expect(url.searchParams.has("sign")).toBe(false);
+    expect(init.headers.Cookie).toBe("uin=123456; qm_keyst=saved-key");
+    expect(init.headers.Origin).toBe("https://y.qq.com");
+  });
+
+  it("官方房间业务拒绝不会重试，不把 HTTP 200 当作成功", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ code: 0, request: { code: 11001, data: {} } })),
+    );
+    await expect(
+      qmRequest(
+        "music.lightUGCRoom.LightUGCRoomSvr",
+        "LightUGCRoomHeartBeat",
+        { showID: "LUGC123" },
+        { appGateway: true, session: false, retry: false, autoRefresh: false },
+      ),
+    ).rejects.toThrow("inner=11001");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("官方网关响应缺少业务码时不能返回伪成功", async () => {
+    fetchMock.mockResolvedValue(new Response('{"code":0}'));
+    await expect(
+      qmRequest(
+        "music.lightUGCRoom.LightUGCRoomSvr",
+        "LightUGCRoomEntry",
+        { showID: "LUGC123" },
+        { appGateway: true, session: false, retry: false },
+      ),
+    ).rejects.toThrow("无效响应");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("四类搜索共用签名网关，并保留分页参数和结果映射", async () => {
     fetchMock.mockImplementation(
       async () =>

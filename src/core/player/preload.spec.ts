@@ -670,3 +670,56 @@ describe("列表播放起点", () => {
     expect(mocks.load).toHaveBeenCalledOnce();
   });
 });
+
+describe("一起听控制路由", () => {
+  it("双方使用原播放按钮时只发送房间操作，离开房间后恢复本地路径", async () => {
+    const { setTogetherControl } = await import("@/services/togetherBridge");
+    const player = await import("./index");
+    const commands = vi.fn();
+    setTogetherControl(commands);
+    try {
+      await player.play();
+      await player.pause();
+      await player.seek(1234);
+      await player.nextTrack();
+      await player.prevTrack();
+      await player.playFrom([mocks.track as Track]);
+      expect(commands.mock.calls.map((c) => c[0].type)).toEqual([
+        "play",
+        "pause",
+        "seek",
+        "next",
+        "prev",
+        "queue",
+      ]);
+      expect(commands.mock.calls[2][0].position).toBe(1234);
+    } finally {
+      setTogetherControl(null);
+    }
+    const { isTogetherActive } = await import("@/services/togetherBridge");
+    expect(isTogetherActive()).toBe(false);
+  });
+});
+
+describe("一起听共享队列操作", () => {
+  it("选歌与添加歌曲发送增量操作，不以单曲替换整个房间", async () => {
+    const { setTogetherControl } = await import("@/services/togetherBridge");
+    const player = await import("./index");
+    const commands = vi.fn();
+    setTogetherControl(commands);
+    try {
+      await player.playNow(mocks.track as Track);
+      player.insertToQueue(mocks.track as Track);
+      player.insertManyToQueue([mocks.track as Track], "end");
+      expect(commands.mock.calls.map((c) => c[0].type)).toEqual([
+        "playTrack",
+        "enqueue",
+        "enqueue",
+      ]);
+      expect(commands.mock.calls[2][0].position).toBe("end");
+      expect(commands.mock.calls.some((c) => c[0].type === "queue")).toBe(false);
+    } finally {
+      setTogetherControl(null);
+    }
+  });
+});

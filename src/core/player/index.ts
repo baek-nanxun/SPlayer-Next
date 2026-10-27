@@ -1,3 +1,5 @@
+import { routeTogether, isTogetherActive } from "@/services/togetherBridge";
+import type { TogetherSnapshot } from "@shared/types/together";
 import type {
   IpcResponse,
   LoadResult,
@@ -106,6 +108,7 @@ const skipOnFailure = async (
   getCurrentToken: () => number,
   autoPlay = true,
 ): Promise<void> => {
+  if (isTogetherActive()) return;
   consecutiveFailures++;
   if (
     consecutiveFailures >= MAX_CONSECUTIVE_FAILURES ||
@@ -361,6 +364,7 @@ const loadTrack = async (
   // 跳过指定关键词歌曲
   const settings = useSettingsStore();
   if (
+    !isTogetherActive() &&
     settings.preset.skipKeywordsSongs &&
     shouldSkipKeywordTrack(track, settings.preset.skipTrackKeywords)
   ) {
@@ -536,6 +540,7 @@ let pendingPlayAfterRestore = false;
 
 /** 恢复播放 */
 export const play = async (): Promise<void> => {
+  if (routeTogether({ type: "play" })) return;
   const status = useStatusStore();
   if (isRestoringLastTrack) {
     pendingPlayAfterRestore = true;
@@ -597,6 +602,7 @@ export const togglePlay = (): void => {
 
 /** 暂停播放 */
 export const pause = async (): Promise<void> => {
+  if (routeTogether({ type: "pause" })) return;
   pauseToken++;
   const status = useStatusStore();
   const prev = status.state;
@@ -618,6 +624,7 @@ export const invalidatePlaybackOperation = (): number => {
 
 /** 停止播放并重置进度 */
 export const stop = async (): Promise<void> => {
+  if (routeTogether({ type: "pause" })) return;
   const token = invalidatePlaybackOperation();
   invalidateNextTrackPreload();
   const status = useStatusStore();
@@ -662,6 +669,7 @@ export const isSeeking = (): boolean => seekTarget !== null;
  * @param restartRound - 是否为单曲循环开启新的统计轮次
  */
 export const seek = async (posMs: number, restartRound = false): Promise<void> => {
+  if (routeTogether({ type: "seek", position: posMs })) return;
   const status = useStatusStore();
   // 歌曲加载中 seek 无意义：引擎此刻没有可 seek 的解码线程，
   // 且 seekTarget 残留会让加载完成后的 position 推送被持续丢弃
@@ -754,6 +762,10 @@ export const setVolume = async (vol: number): Promise<void> => {
  * @param v - 速度（0.5 ~ 2.0）
  */
 export const setSpeed = async (v: number): Promise<void> => {
+  if (isTogetherActive() && v !== 1) {
+    toast.warning("一起听期间使用正常播放速度");
+    return;
+  }
   const safe = Number.isFinite(v) ? Math.max(0.5, Math.min(2.0, v)) : 1.0;
   const result = await window.api.player.setSpeed(safe);
   if (result.success) {
@@ -822,6 +834,7 @@ export const playFrom = async (
   { startIndex, context }: PlayFromOptions = {},
 ): Promise<void> => {
   if (items.length === 0) return;
+  if (routeTogether({ type: "queue", tracks: [...items], index: startIndex ?? 0 })) return;
   const status = useStatusStore();
   const media = useMediaStore();
   // 退出特殊模式
@@ -961,6 +974,7 @@ export const dislikeFmTrack = async (): Promise<void> => {
  * @param autoPlay - 是否自动播放
  */
 export const nextTrack = async (autoPlay = true): Promise<void> => {
+  if (routeTogether({ type: "next" })) return;
   const status = useStatusStore();
   // 私人 FM
   if (status.fmMode) {
@@ -997,6 +1011,7 @@ export const trySmartTransition = async (
   preparedId?: string,
   endPositionMs?: number,
 ): Promise<void> => {
+  if (isTogetherActive()) return;
   const settings = useSettingsStore();
   const status = useStatusStore();
   if (
@@ -1092,6 +1107,8 @@ export const trySmartTransition = async (
  * @param index - 队列位置
  */
 export const playAtIndex = async (index: number): Promise<void> => {
+  const chosen = queue.queue.value[index];
+  if (chosen && routeTogether({ type: "playTrack", track: chosen })) return;
   const status = useStatusStore();
   if (index < 0 || index >= queue.queueLength.value) return;
   if (index === status.playIndex) {
@@ -1106,6 +1123,7 @@ export const playAtIndex = async (index: number): Promise<void> => {
 
 /** 播放上一首，首位时回绕到末尾 */
 export const prevTrack = async (): Promise<void> => {
+  if (routeTogether({ type: "prev" })) return;
   const status = useStatusStore();
   if (status.fmMode) return;
   if (queue.queueLength.value === 0) return;
@@ -1192,6 +1210,12 @@ export const setShuffleMode = (mode: ShuffleMode): void => {
  * @param index - 要移除的队列位置
  */
 export const removeFromQueue = async (index: number): Promise<void> => {
+  const removed = queue.queue.value[index];
+  if (
+    removed &&
+    routeTogether({ type: "remove", track: { id: removed.id, source: removed.source } })
+  )
+    return;
   const status = useStatusStore();
   if (index < 0 || index >= queue.queueLength.value) return;
   const isCurrentPlaying = index === status.playIndex;
@@ -1243,6 +1267,15 @@ export const insertToQueue = (
   afterIndex?: number,
   context?: PlaybackContext,
 ): number => {
+  if (
+    routeTogether({
+      type: "enqueue",
+      tracks: [item],
+      position:
+        afterIndex !== undefined && afterIndex >= queue.queue.value.length - 1 ? "end" : "next",
+    })
+  )
+    return -1;
   const status = useStatusStore();
   const len = queue.queue.value.length;
   const raw = afterIndex ?? status.playIndex + 1;
@@ -1276,6 +1309,7 @@ export const insertManyToQueue = (
   context?: PlaybackContext,
 ): number => {
   if (items.length === 0) return 0;
+  if (routeTogether({ type: "enqueue", tracks: [...items], position })) return 0;
   const status = useStatusStore();
   const seen = new Set(queue.queue.value.map((track) => track.id));
   const fresh: Track[] = [];
@@ -1295,6 +1329,7 @@ export const insertManyToQueue = (
  * 如果是当前正在播放的歌曲则继续播放，不重新加载
  */
 export const playNow = async (item: Track, context?: PlaybackContext): Promise<void> => {
+  if (routeTogether({ type: "playTrack", track: item })) return;
   const status = useStatusStore();
   const media = useMediaStore();
   // 同一首歌且已成功加载
@@ -1360,6 +1395,20 @@ export const playFiles = async (filePaths: string[]): Promise<void> => {
  * @param toIndex - 目标位置
  */
 export const moveInQueue = (fromIndex: number, toIndex: number): void => {
+  if (isTogetherActive()) {
+    const tracks = [...queue.queue.value];
+    const chosen = tracks[fromIndex];
+    if (!chosen || toIndex < 0 || toIndex >= tracks.length) return;
+    tracks.splice(fromIndex, 1);
+    tracks.splice(toIndex, 0, chosen);
+    const before = tracks[toIndex + 1];
+    routeTogether({
+      type: "move",
+      track: { id: chosen.id, source: chosen.source },
+      before: before ? { id: before.id, source: before.source } : null,
+    });
+    return;
+  }
   const status = useStatusStore();
   queue.moveInQueue(fromIndex, toIndex);
   // 根据移动方向调整 playIndex
@@ -1516,4 +1565,79 @@ export const disposePlayer = (): void => {
     unsubscribe();
     unsubscribe = null;
   }
+};
+
+/** 将房间队列应用到双方播放列表，纯增删排序不重新加载或拖动歌曲
+ * @param snapshot - 房间完整队列快照
+ */
+export const applyTogetherQueue = (snapshot: TogetherSnapshot): void => {
+  if (!snapshot.tracks.length && snapshot.queueRevision === 0) return;
+  const old = queue.queue.value;
+  if (
+    old.length !== snapshot.tracks.length ||
+    old.some((t, i) => t.id !== snapshot.tracks[i]?.id || t.source !== snapshot.tracks[i]?.source)
+  )
+    queue.setQueue(snapshot.tracks);
+  useStatusStore().playIndex = snapshot.tracks.length ? snapshot.index : -1;
+};
+
+/** 应用房间权威状态，直接驱动引擎以避免再次广播
+ * @param snapshot - 房间快照
+ * @param current - 当前任务是否仍有效
+ */
+export const applyTogetherSnapshot = async (
+  snapshot: TogetherSnapshot,
+  current: () => boolean,
+): Promise<void> => {
+  const started = performance.now();
+  const status = useStatusStore();
+  const target = snapshot.tracks[snapshot.index];
+  if (!target) {
+    await window.api.player.pause();
+    status.state = "paused";
+    playback.setPlaying(false);
+    if (snapshot.queueRevision > 0) {
+      useMediaStore().clear();
+      status.currentSource = null;
+    }
+    return;
+  }
+  status.fmMode = false;
+  status.heartMode = false;
+  status.shuffleMode = "off";
+  status.repeatMode = "list";
+  if (status.speed !== 1) {
+    await window.api.player.setSpeed(1);
+    status.speed = 1;
+    playback.setSpeed(1);
+  }
+  invalidateNextTrackPreload();
+  applyTogetherQueue(snapshot);
+  const old = useMediaStore().track;
+  if (
+    old?.id !== target.id ||
+    old?.source !== target.source ||
+    !status.currentSource ||
+    status.state === "idle"
+  ) {
+    await loadTrack(target, undefined, false);
+    if (!current()) return;
+    if (status.state !== "paused" && status.state !== "playing")
+      throw new Error("歌曲无法播放，请检查对应平台账号及会员权限");
+  }
+  if (!current()) return;
+  const pos = Math.min(
+    target.duration,
+    snapshot.position + (snapshot.playing ? performance.now() - started : 0),
+  );
+  const result = await window.api.player.seek(pos);
+  if (!result.success) throw new Error("无法同步播放进度");
+  markSeek(pos);
+  status.position = pos;
+  playback.setCurrentTime(pos, { force: true });
+  if (!current()) return;
+  const res = await (snapshot.playing ? window.api.player.play() : window.api.player.pause());
+  if (!res.success) throw new Error("歌曲播放失败，请检查音源权限");
+  status.state = snapshot.playing ? "playing" : "paused";
+  playback.setPlaying(snapshot.playing);
 };

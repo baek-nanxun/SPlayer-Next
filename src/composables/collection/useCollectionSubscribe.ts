@@ -1,6 +1,6 @@
 import type { Ref } from "vue";
 import type { Collection } from "@/types/collection";
-import { useUserStore } from "@/stores/user";
+import { useAccountStore } from "@/stores/account";
 import { toast } from "@/composables/useToast";
 
 /**
@@ -11,13 +11,13 @@ import { toast } from "@/composables/useToast";
  */
 export const useCollectionSubscribe = (collection: Ref<Collection | null>) => {
   const { t } = useI18n();
-  const userStore = useUserStore();
+  const userStore = useAccountStore();
   const busy = ref(false);
 
   /** 当前是否已收藏 */
   const isSubscribed = computed(() => {
     const current = collection.value;
-    if (!current || current.source !== "netease") return false;
+    if (!current || current.source !== userStore.platform || !userStore.isLoggedIn) return false;
     if (current.type === "playlist") {
       return userStore.subscribedPlaylists.some((item) => item.id === current.id);
     }
@@ -30,11 +30,11 @@ export const useCollectionSubscribe = (collection: Ref<Collection | null>) => {
   /** 是否显示收藏按钮：仅 netease，且不是自建（自建无法再"收藏"） */
   const available = computed(() => {
     const current = collection.value;
-    if (!current || current.source !== "netease") return false;
+    if (!current || current.source !== userStore.platform || !userStore.isLoggedIn) return false;
     if (current.type === "playlist") {
       return !userStore.createdPlaylists.some((item) => item.id === current.id);
     }
-    if (current.type === "album") return true;
+    if (current.type === "album") return current.source === "netease";
     return false;
   });
 

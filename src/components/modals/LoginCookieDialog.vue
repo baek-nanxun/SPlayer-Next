@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { toast } from "@/composables/useToast";
-import { useUserStore } from "@/stores/user";
+import { useAccountStore } from "@/stores/account";
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{
@@ -10,7 +10,7 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
-const user = useUserStore();
+const user = useAccountStore();
 
 const raw = ref("");
 const loading = ref(false);
@@ -38,7 +38,7 @@ const submit = async (): Promise<void> => {
       toast.error(t("login.cookieInvalid"));
       return;
     }
-    const ok = await user.fetchStatus();
+    const ok = await user.selectPlatform("netease");
     if (!ok) {
       toast.error(t("login.failed"));
       return;

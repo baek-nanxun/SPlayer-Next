@@ -2,7 +2,7 @@ import { randomBytes, randomUUID as cryptoRandomUUID } from "node:crypto";
 import * as zlib from "node:zlib";
 import { CLIENT_LOG3_DOMAIN } from "./config";
 import { createPlaybackLogContext } from "./playLog";
-import { fetchWithProxy } from "@main/utils/proxy";
+import { fetchNeteaseDirect } from "@main/apis/netease/core/direct";
 
 interface NeteaseLogRecord {
   time: number;
@@ -328,7 +328,7 @@ export const doUpload = async (
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      resp = await fetchWithProxy(
+      resp = await fetchNeteaseDirect(
         `${CLIENT_LOG3_DOMAIN}/api/clientlog/encrypt/upload?multiupload=true`,
         {
           method: "POST",

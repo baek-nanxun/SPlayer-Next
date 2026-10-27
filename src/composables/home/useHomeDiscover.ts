@@ -1,5 +1,5 @@
 import type { CoverItem } from "@/types/artist";
-import { useUserStore } from "@/stores/user";
+import { useAccountStore } from "@/stores/account";
 import {
   fetchRecommendPlaylists,
   fetchRadarPlaylists,
@@ -13,7 +13,7 @@ const CACHE_TTL = 30 * 60 * 1000;
 /** 首页推荐内容缓存 */
 interface DiscoverCache {
   at: number;
-  loggedIn: boolean;
+  accountKey: string;
   recommend: CoverItem[];
   radar: CoverItem[];
   artists: CoverItem[];
@@ -38,7 +38,7 @@ const safe = (label: string, task: Promise<CoverItem[]>): Promise<CoverItem[]> =
  */
 export const useHomeDiscover = () => {
   const { t } = useI18n();
-  const user = useUserStore();
+  const user = useAccountStore();
 
   /** 推荐歌单 / 专属歌单 */
   const recommendPlaylists = shallowRef<CoverItem[]>([]);
@@ -51,11 +51,19 @@ export const useHomeDiscover = () => {
 
   /** 推荐歌单标题 */
   const recommendTitle = computed(() =>
-    user.isLoggedIn ? t("home.recommend.title") : t("home.recommend.titleGuest"),
+    user.platform === "qqmusic"
+      ? t("home.qqPlaylists.title")
+      : user.isLoggedIn
+        ? t("home.recommend.title")
+        : t("home.recommend.titleGuest"),
   );
   /** 推荐歌单副标题 */
   const recommendSubtitle = computed(() =>
-    user.isLoggedIn ? t("home.recommend.subtitle") : t("home.recommend.subtitleGuest"),
+    user.platform === "qqmusic"
+      ? t("home.qqPlaylists.subtitle")
+      : user.isLoggedIn
+        ? t("home.recommend.subtitle")
+        : t("home.recommend.subtitleGuest"),
   );
 
   /** 用缓存填充各区块 */
@@ -66,10 +74,36 @@ export const useHomeDiscover = () => {
     newAlbums.value = data.albums;
   };
 
+  let generation = 0;
+  onScopeDispose(() => {
+    generation++;
+  });
+
   /** 拉取首页推荐内容 */
   const load = async (): Promise<void> => {
+    const epoch = ++generation;
+    const accountKey = `${user.platform}:${user.profile?.userId ?? "guest"}`;
+    apply({ at: 0, accountKey, recommend: [], radar: [], artists: [], albums: [] });
+    if (user.platform === "qqmusic") {
+      const unique = new Map(
+        user.playlists.filter((p) => p.id !== user.likedPlaylistId).map((p) => [p.id, p]),
+      );
+      recommendPlaylists.value = [...unique.values()].flatMap((p) =>
+        p.id
+          ? [
+              {
+                id: p.id,
+                title: p.name,
+                cover: p.cover,
+                trackCount: p.trackCount ?? 0,
+              },
+            ]
+          : [],
+      );
+      return;
+    }
     const loggedIn = user.isLoggedIn;
-    if (cache && cache.loggedIn === loggedIn && Date.now() - cache.at < CACHE_TTL) {
+    if (cache && cache.accountKey === accountKey && Date.now() - cache.at < CACHE_TTL) {
       apply(cache);
       return;
     }
@@ -79,16 +113,18 @@ export const useHomeDiscover = () => {
       safe("artists", fetchArtists()),
       safe("new albums", fetchNewAlbums()),
     ]);
-    cache = { at: Date.now(), loggedIn, recommend, radar, artists: artistList, albums };
+    if (epoch !== generation) return;
+    cache = { at: Date.now(), accountKey, recommend, radar, artists: artistList, albums };
     apply(cache);
   };
 
   // 登录态变化
   watch(
-    () => user.isLoggedIn,
+    () => [user.platform, user.profile?.userId, user.playlists],
     () => {
       void load();
     },
+    { flush: "sync" },
   );
 
   return {

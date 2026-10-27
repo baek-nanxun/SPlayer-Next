@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isTogetherActive } from "@/services/togetherBridge";
 import type { Artist, PlaybackContext, Track, TrackSource } from "@shared/types/player";
 import type { CollectionType } from "@/types/collection";
 import type { SongListSortKey, SongListSortPreference, SortField, SortOrder } from "@/types/list";
@@ -376,7 +377,10 @@ const onPlayClick = (item: Track, index: number): void => {
     player.togglePlay();
     return;
   }
-  if (settings.player.songListPlayBehavior === "all") {
+  if (
+    settings.player.songListPlayBehavior === "all" ||
+    (isTogetherActive() && route.name !== "search")
+  ) {
     void player.playFrom(sortedItems.value, { startIndex: index, context: props.playbackContext });
     return;
   }
@@ -489,7 +493,7 @@ defineExpose({
                 <span>{{ t("songList.batch.download") }}</span>
               </SButton>
               <SButton
-                v-if="source === 'local' || source === 'netease'"
+                v-if="source === 'local' || source === 'netease' || source === 'qqmusic'"
                 variant="ghost"
                 size="small"
                 :disabled="batch.selectedCount.value === 0"

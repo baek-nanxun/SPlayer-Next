@@ -12,6 +12,10 @@ const state = ref<QrLoginState>("waiting");
 const nickname = ref("");
 const avatarUrl = ref("");
 const refreshing = ref(false);
+const failed = ref(false);
+let generation = 0;
+let disposed = false;
+let polling = false;
 
 const tip = computed(() => {
   if (state.value === "expired") return t("login.qrTipExpired");
@@ -23,12 +27,15 @@ const tip = computed(() => {
 const refresh = async (): Promise<void> => {
   if (refreshing.value) return;
   refreshing.value = true;
+  failed.value = false;
+  const request = ++generation;
   pause();
   if (state.value !== "expired") qrUrl.value = "";
   nickname.value = "";
   avatarUrl.value = "";
   try {
     const result = await props.adapter.create();
+    if (disposed || request !== generation || !props.active) return;
     key.value = result.key;
     if (result.content.startsWith("data:image/") || result.content.startsWith("blob:")) {
       qrUrl.value = result.content;
@@ -44,25 +51,39 @@ const refresh = async (): Promise<void> => {
     }
     state.value = "waiting";
     if (props.active) resume();
+  } catch {
+    if (!disposed && request === generation) failed.value = true;
   } finally {
-    refreshing.value = false;
+    if (request === generation) refreshing.value = false;
   }
 };
 
 const poll = async (): Promise<void> => {
-  if (!key.value) return;
-  const result = await props.adapter.check(key.value);
-  state.value = result.state;
-  nickname.value = result.nickname ?? nickname.value;
-  avatarUrl.value = result.avatarUrl ?? avatarUrl.value;
-  if (result.state === "expired") {
-    pause();
-    await refresh();
-    return;
-  }
-  if (result.state === "success") {
-    pause();
-    emit("success");
+  if (!key.value || polling || !props.active || disposed) return;
+  const request = generation;
+  polling = true;
+  try {
+    const result = await props.adapter.check(key.value);
+    if (disposed || request !== generation || !props.active) return;
+    state.value = result.state;
+    nickname.value = result.nickname ?? nickname.value;
+    avatarUrl.value = result.avatarUrl ?? avatarUrl.value;
+    if (result.state === "expired") {
+      pause();
+      await refresh();
+      return;
+    }
+    if (result.state === "success") {
+      pause();
+      emit("success");
+    }
+  } catch {
+    if (!disposed && request === generation) {
+      pause();
+      failed.value = true;
+    }
+  } finally {
+    polling = false;
   }
 };
 
@@ -72,12 +93,20 @@ watch(
   () => props.active,
   (active) => {
     if (active) void refresh();
-    else pause();
+    else {
+      generation++;
+      refreshing.value = false;
+      pause();
+    }
   },
   { immediate: true },
 );
 
-onBeforeUnmount(pause);
+onBeforeUnmount(() => {
+  disposed = true;
+  generation++;
+  pause();
+});
 
 defineExpose({ pause, resume, refresh });
 </script>
@@ -120,6 +149,7 @@ defineExpose({ pause, resume, refresh });
         {{ t("login.qrTipExpired") }}
       </div>
     </div>
-    <div class="text-xs text-on-surface-variant">{{ tip }}</div>
+    <SButton v-if="failed" variant="text" @click="refresh">{{ t("common.retry") }}</SButton>
+    <div v-else class="text-xs text-on-surface-variant">{{ tip }}</div>
   </div>
 </template>

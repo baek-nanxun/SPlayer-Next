@@ -1,5 +1,5 @@
 import type { PlayStatsSummary } from "@shared/types/stats";
-import { useUserStore } from "@/stores/user";
+import { useAccountStore } from "@/stores/account";
 import { useHistoryStore } from "@/stores/history";
 
 /** 单个统计卡片 */
@@ -32,7 +32,7 @@ const pickRandom = <T>(list: T[]): T => list[Math.floor(Math.random() * list.len
  */
 export const useHomeHeader = () => {
   const { t } = useI18n();
-  const user = useUserStore();
+  const user = useAccountStore();
   const history = useHistoryStore();
 
   /** 时长格式化：X 小时 Y 分钟 */

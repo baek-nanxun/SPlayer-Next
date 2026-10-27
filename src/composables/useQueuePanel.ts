@@ -1,3 +1,4 @@
+import { routeTogether } from "@/services/togetherBridge";
 import type { Ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { Track } from "@shared/types/player";
@@ -43,6 +44,10 @@ export const useQueuePanel = (options: UseQueuePanelOptions) => {
   /** 清空队列 + 重置播放索引 */
   const clearAll = (): void => {
     if (queueLength.value === 0) return;
+    if (routeTogether({ type: "clear" })) {
+      clearConfirmOpen.value = false;
+      return;
+    }
     player.stop();
     statusStore.playIndex = -1;
     clearQueue();

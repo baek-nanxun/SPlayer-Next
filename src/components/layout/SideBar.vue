@@ -8,7 +8,7 @@ import { SIDEBAR_NAV_META, applySavedOrder } from "@/components/layout/sidebarNa
 import { useSettingsStore } from "@/stores/settings";
 import { useStatusStore } from "@/stores/status";
 import { usePlaylistStore } from "@/stores/playlist";
-import { useUserStore } from "@/stores/user";
+import { useAccountStore } from "@/stores/account";
 import { useDownloadStore } from "@/stores/download";
 import { useHeartMode } from "@/composables/useHeartMode";
 import { useResponsiveLayout } from "@/composables/useResponsiveLayout";
@@ -29,7 +29,7 @@ const route = useRoute();
 const { appearance, system: systemSettings } = useSettingsStore();
 const status = useStatusStore();
 const playlistStore = usePlaylistStore();
-const userStore = useUserStore();
+const userStore = useAccountStore();
 const downloadStore = useDownloadStore();
 const { enterHeartMode } = useHeartMode();
 const { sidebarCollapsed } = useResponsiveLayout();
@@ -57,7 +57,9 @@ const handleCreate = (): void => {
 /** 新建成功后跳转到该歌单 */
 const handleCreated = (playlistId: string, scope: ContentScope): void => {
   status.myPlaylistSource = scope;
-  router.push(`/collection/${scope === "local" ? "local" : "netease"}/playlist/${playlistId}`);
+  router.push(
+    `/collection/${scope === "local" ? "local" : userStore.platform}/playlist/${playlistId}`,
+  );
 };
 
 /** 我的歌单分组头部 */
@@ -119,13 +121,15 @@ const myPlaylistItems = computed<SMenuItem[]>(() => {
         cover: pl.cover ?? "",
         showCover,
       }))
-    : userStore.createdPlaylists.slice(1).map((pl) => ({
-        key: `/collection/netease/playlist/${pl.id}`,
-        label: pl.name,
-        icon: markRaw(IconLucideListMusic),
-        cover: pl.cover ?? "",
-        showCover,
-      }));
+    : userStore.createdPlaylists
+        .filter((pl) => pl.id !== userStore.likedPlaylistId)
+        .map((pl) => ({
+          key: `/collection/${userStore.platform}/playlist/${pl.id}`,
+          label: pl.name,
+          icon: markRaw(IconLucideListMusic),
+          cover: pl.cover ?? "",
+          showCover,
+        }));
   const order = local
     ? appearance.sidebarPlaylistOrder.myLocal
     : appearance.sidebarPlaylistOrder.myOnline;
@@ -137,7 +141,7 @@ const subscribedItems = computed<SMenuItem[]>(() => {
   const showCover = appearance.sidebarPlaylistCover;
   const hidden = hiddenKeys.value;
   const items: SMenuItem[] = userStore.subscribedPlaylists.map((pl) => ({
-    key: `/collection/netease/playlist/${pl.id}`,
+    key: `/collection/${userStore.platform}/playlist/${pl.id}`,
     label: pl.name,
     icon: markRaw(IconLucideListMusic),
     cover: pl.cover ?? "",
@@ -188,7 +192,8 @@ const navItems = computed<SMenuItem[]>(() => {
       if (key === "/download" && !systemSettings.download.enabled) continue;
       if (key === "/streaming" && !systemSettings.streaming.enabled) continue;
       const item: SMenuItem = { key, label: t(entry.labelKey), icon: markRaw(entry.icon) };
-      if (key === "/liked") item.trailing = renderHeartModeTrailing;
+      if (key === "/liked" && userStore.platform === "netease")
+        item.trailing = renderHeartModeTrailing;
       if (key === "/download" && downloadStore.activeCount > 0)
         item.trailing = renderDownloadTrailing;
       items.push(item);
@@ -306,7 +311,14 @@ const onSelect = (key: string) => {
  * @param existing - 当前存在的歌单路由键集合
  */
 const prunePlaylistArchive = (existing: ReadonlySet<string>): void => {
-  const isStale = (key: string): boolean => key.startsWith("/collection/") && !existing.has(key);
+  const isStale = (key: string): boolean => {
+    const isLocal = key.startsWith("/collection/local/");
+    const isActiveOnline =
+      userStore.isLoggedIn &&
+      userStore.playlists.length > 0 &&
+      key.startsWith(`/collection/${userStore.platform}/`);
+    return (isLocal || isActiveOnline) && !existing.has(key);
+  };
   const hiddenKeysNext = appearance.sidebarHiddenKeys.filter((key) => !isStale(key));
   if (hiddenKeysNext.length !== appearance.sidebarHiddenKeys.length)
     appearance.sidebarHiddenKeys = hiddenKeysNext;
@@ -332,7 +344,8 @@ watch(
     const existing = new Set<string>();
     for (const pl of localLists) existing.add(`/collection/local/playlist/${pl.id}`);
     if (onlineLists && onlineLists.length > 0) {
-      for (const pl of onlineLists) existing.add(`/collection/netease/playlist/${pl.id}`);
+      for (const pl of onlineLists)
+        existing.add(`/collection/${userStore.platform}/playlist/${pl.id}`);
     }
     if (existing.size === 0) return;
     prunePlaylistArchive(existing);

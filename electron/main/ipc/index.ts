@@ -1,3 +1,4 @@
+import { registerTogetherIpc } from "./together";
 import { registerSystemIpc } from "./system";
 import { registerPlayerIpc } from "./player";
 import { registerConfigIpc } from "./config";
@@ -29,6 +30,7 @@ import { registerOpenccIpc } from "./opencc";
  * @param onStartupComplete - 主界面启动完成后执行的应用初始化回调
  */
 export const registerIpcHandlers = (onStartupComplete: () => void): void => {
+  registerTogetherIpc();
   registerSystemIpc();
   registerPlayerIpc();
   registerConfigIpc();

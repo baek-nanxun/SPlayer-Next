@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useQQUserStore } from "@/stores/qqUser";
 import { useDataStore } from "@/stores/data";
 import { toast } from "@/composables/useToast";
 import { getPlatformAccountAdapter } from "@/apis/login/platform";
@@ -10,6 +11,7 @@ defineOptions({ inheritAttrs: false });
 
 const { t } = useI18n();
 const dataStore = useDataStore();
+const qqUser = useQQUserStore();
 
 const props = defineProps<{ platform: Platform }>();
 const adapter = computed(() => getPlatformAccountAdapter(props.platform));
@@ -71,9 +73,12 @@ watch(cookieModalOpen, (val) => {
 const refresh = async (): Promise<void> => {
   const latest = await adapter.value.fetchProfile();
   dataStore.setPlatformProfile(props.platform, latest);
+  if (props.platform === "qqmusic") qqUser.applyProfile(latest);
 };
 
-onMounted(refresh);
+onMounted(() => {
+  void refresh().catch(() => toast.error(t("login.failed")));
+});
 
 /** 发起网页登录 */
 const handleLogin = async (): Promise<void> => {
@@ -106,6 +111,7 @@ const handleDisconnect = async (): Promise<void> => {
   confirmOpen.value = false;
   await adapter.value.logout();
   dataStore.clearPlatformProfile(props.platform);
+  if (props.platform === "qqmusic") qqUser.invalidateSession();
   toast.success(t("settings.platformLogin.toast.logoutDone", { name: platformName.value }));
 };
 
@@ -125,12 +131,14 @@ const handleManualCookieSubmit = async (): Promise<void> => {
     const latest = await adapter.value.fetchProfile();
     if (latest) {
       dataStore.setPlatformProfile(props.platform, latest);
+      if (props.platform === "qqmusic") qqUser.applyProfile(latest);
       cookieModalOpen.value = false;
       manualCookie.value = "";
       toast.success(t("settings.platformLogin.toast.cookieSuccess", { name: platformName.value }));
     } else {
       await adapter.value.logout();
       dataStore.clearPlatformProfile(props.platform);
+      if (props.platform === "qqmusic") qqUser.invalidateSession();
       toast.error(t("settings.platformLogin.toast.cookieInvalid"));
     }
   } catch (err) {
@@ -145,7 +153,12 @@ const handleManualCookieSubmit = async (): Promise<void> => {
  * 二维码登录成功回调
  */
 const handleQrSuccess = async (): Promise<void> => {
-  await refresh();
+  try {
+    await refresh();
+  } catch {
+    toast.error(t("login.failed"));
+    return;
+  }
   if (!profile.value) {
     toast.error(t("settings.platformLogin.toast.loginFailed", { name: platformName.value }));
     return;

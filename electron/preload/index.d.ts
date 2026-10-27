@@ -37,6 +37,22 @@ declare global {
   interface Window {
     electron: ElectronAPI;
     api: {
+      together: {
+        hostQQMusic: (
+          tracks: import("@shared/types/together").TogetherTrack[],
+          index: number,
+          position: number,
+        ) => Promise<void>;
+        hostNetease: () => Promise<void>;
+        status: () => Promise<import("@shared/types/together").TogetherStatus>;
+        host: (name: string, address?: string, avatar?: string) => Promise<string>;
+        join: (invite: string, name: string, avatar?: string) => Promise<void>;
+        send: (message: unknown) => Promise<void>;
+        leave: () => Promise<void>;
+        onStatus: (
+          callback: (state: import("@shared/types/together").TogetherStatus) => void,
+        ) => () => void;
+      };
       config: ConfigApi;
       player: PlayerApi;
       system: {

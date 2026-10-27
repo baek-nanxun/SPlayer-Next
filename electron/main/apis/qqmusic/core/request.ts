@@ -76,6 +76,8 @@ interface FcgResponse {
 }
 
 export interface QMRequestOptions {
+  /** 非幂等写请求禁止自动重试 */
+  retry?: boolean;
   /** 是否在请求前初始化客户端会话 */
   session?: boolean;
   /** 追加到 comm 的字段（如 tmeLoginType） */
@@ -86,6 +88,8 @@ export interface QMRequestOptions {
   autoRefresh?: boolean;
   /** 是否使用带 zzc 签名的 musics.fcg 网关 */
   signed?: boolean;
+  /** 官方一起听使用带 _ 签名参数的移动端 musicu 网关 */
+  appGateway?: boolean;
 }
 
 /** 发起一次 fcg POST */
@@ -94,12 +98,13 @@ const postRaw = async (
   extraHeaders?: Record<string, string>,
   useAuth = true,
   signed = false,
+  appGateway = false,
 ): Promise<FcgResponse> => {
   const cookies = useAuth ? getQQMusicCookies() : {};
   const cookieStr = sessionToCookieHeader(cookies);
   const payload = JSON.stringify(body);
-  const url = new URL(signed ? "musics.fcg" : QM_API_URL, QM_API_URL);
-  if (signed) {
+  const url = new URL(signed && !appGateway ? "musics.fcg" : QM_API_URL, QM_API_URL);
+  if (signed || appGateway) {
     // 签名必须基于实际发送的 JSON 字符串，重新序列化会改变校验结果。
     const hash = createHash("sha1").update(payload).digest("hex");
     const prefix = [23, 14, 6, 36, 16, 7, 19].map((index) => hash[index]).join("");
@@ -112,13 +117,14 @@ const postRaw = async (
     )
       .toString("base64")
       .replace(/[/+=]/g, "");
-    url.searchParams.set("sign", `zzc${prefix}${middle}${suffix}`.toLowerCase());
+    url.searchParams.set(appGateway ? "_" : "sign", `zzc${prefix}${middle}${suffix}`.toLowerCase());
   }
 
   const res = await fetch(url.toString(), {
     method: "POST",
     headers: {
       ...QM_HEADERS,
+      ...(appGateway ? { Origin: "https://y.qq.com" } : {}),
       ...(cookieStr ? { Cookie: cookieStr } : { Cookie: "tmeLoginType=-1;" }),
       ...extraHeaders,
     },
@@ -212,11 +218,17 @@ export const qmRequest = async <T = unknown>(
   };
 
   let lastErr: unknown;
-  for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
+  const retries = options.retry === false ? 0 : MAX_RETRY;
+  for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const comm = buildComm();
       const body = { comm, request: { module, method, param } };
-      const data = await postRaw(body, undefined, useAuth, options.signed);
+      const data = await postRaw(body, undefined, useAuth, options.signed, options.appGateway);
+      if (
+        options.appGateway &&
+        (typeof data.code !== "number" || typeof data.request?.code !== "number")
+      )
+        throw new Error("QQ 音乐官方房间返回了无效响应");
       const outerCode = data.code ?? 0;
       const innerCode = data.request?.code ?? 0;
 
@@ -226,7 +238,12 @@ export const qmRequest = async <T = unknown>(
         getQQMusicUin() !== "0" &&
         outerCode === 0 &&
         (innerCode === 1000 || innerCode === 2001);
-      if (isAuthError && options.autoRefresh !== false && !triedRefresh) {
+      if (
+        isAuthError &&
+        options.retry !== false &&
+        options.autoRefresh !== false &&
+        !triedRefresh
+      ) {
         triedRefresh = true;
         coreLog.warn(
           `[qm-request] 接口被拒绝 (outer=${outerCode} inner=${innerCode})，尝试自动刷新凭据...`,
@@ -247,7 +264,7 @@ export const qmRequest = async <T = unknown>(
       return data.request?.data as T;
     } catch (err) {
       lastErr = err;
-      if (attempt < MAX_RETRY) await delay(RETRY_BACKOFF);
+      if (attempt < retries) await delay(RETRY_BACKOFF);
     }
   }
   throw lastErr;

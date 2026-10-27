@@ -1,7 +1,7 @@
 import type { Ref } from "vue";
 import type { Collection } from "@/types/collection";
 import { usePlaylistStore } from "@/stores/playlist";
-import { useUserStore } from "@/stores/user";
+import { useAccountStore } from "@/stores/account";
 import { toast } from "@/composables/useToast";
 
 export interface PlaylistManageOptions {
@@ -24,14 +24,14 @@ export const usePlaylistManage = (
 ) => {
   const { t } = useI18n();
   const playlistStore = usePlaylistStore();
-  const userStore = useUserStore();
+  const userStore = useAccountStore();
 
   /** 是否可管理 */
   const canManage = computed(() => {
     const current = collection.value;
     if (!current || current.type !== "playlist") return false;
     if (current.source === "local") return true;
-    if (current.source !== "netease") return false;
+    if (current.source !== userStore.platform || !userStore.isLoggedIn) return false;
     const isCreated = userStore.createdPlaylists.some((item) => item.id === current.id);
     const isLiked = userStore.likedPlaylistId === current.id;
     return isCreated && !isLiked;
@@ -45,7 +45,7 @@ export const usePlaylistManage = (
 
   const openEdit = (): void => {
     const current = collection.value;
-    if (!current) return;
+    if (!current || !canManage.value || current.source === "qqmusic") return;
     editTitle.value = current.title;
     editDescription.value = current.description ?? "";
     editOpen.value = true;
@@ -53,7 +53,7 @@ export const usePlaylistManage = (
 
   const saveEdit = async (): Promise<void> => {
     const current = collection.value;
-    if (!current || submitting.value || !editTitle.value.trim()) return;
+    if (!current || !canManage.value || submitting.value || !editTitle.value.trim()) return;
     submitting.value = true;
     try {
       const title = editTitle.value.trim();
@@ -86,7 +86,7 @@ export const usePlaylistManage = (
 
   const confirmDelete = async (): Promise<void> => {
     const current = collection.value;
-    if (!current || deleting.value) return;
+    if (!current || !canManage.value || deleting.value) return;
     deleting.value = true;
     try {
       if (current.source === "local") {

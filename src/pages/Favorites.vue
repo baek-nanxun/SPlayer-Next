@@ -2,7 +2,7 @@
 defineOptions({ name: "Favorites" });
 
 import type { CoverItem } from "@/types/artist";
-import { useUserStore } from "@/stores/user";
+import { useAccountStore } from "@/stores/account";
 import {
   albumsToCoverItems,
   artistsToCoverItems,
@@ -17,7 +17,7 @@ import IconMaterialSymbolsFavoriteOutline from "~icons/material-symbols/favorite
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
-const user = useUserStore();
+const user = useAccountStore();
 
 type FavTab = "playlist" | "album" | "artist";
 
@@ -25,6 +25,7 @@ const TAB_KEYS: readonly FavTab[] = ["playlist", "album", "artist"];
 
 /** 当前 tab */
 const activeTab = computed<FavTab>(() => {
+  if (user.platform === "qqmusic") return "playlist";
   const tab = route.query.tab;
   return typeof tab === "string" && (TAB_KEYS as readonly string[]).includes(tab)
     ? (tab as FavTab)
@@ -35,11 +36,13 @@ const onTabSwitch = (key: string): void => {
   router.replace({ query: { ...route.query, tab: key } });
 };
 
-const tabs = computed(() => [
-  { key: "playlist" satisfies FavTab, label: t("favorites.tabs.playlist") },
-  { key: "album" satisfies FavTab, label: t("favorites.tabs.album") },
-  { key: "artist" satisfies FavTab, label: t("favorites.tabs.artist") },
-]);
+const tabs = computed(() =>
+  [
+    { key: "playlist" satisfies FavTab, label: t("favorites.tabs.playlist") },
+    { key: "album" satisfies FavTab, label: t("favorites.tabs.album") },
+    { key: "artist" satisfies FavTab, label: t("favorites.tabs.artist") },
+  ].filter((item) => user.platform === "netease" || item.key === "playlist"),
+);
 
 const playlistItems = computed<CoverItem[]>(() =>
   user.subscribedPlaylists.map((pl) => ({
@@ -81,9 +84,9 @@ const countMeta = computed(() => {
 
 const handleClick = (item: CoverItem): void => {
   if (activeTab.value === "artist") {
-    router.push(`/artist/netease/${encodeURIComponent(item.id)}`);
+    router.push(`/artist/${user.platform}/${encodeURIComponent(item.id)}`);
   } else {
-    router.push(`/collection/netease/${activeTab.value}/${encodeURIComponent(item.id)}`);
+    router.push(`/collection/${user.platform}/${activeTab.value}/${encodeURIComponent(item.id)}`);
   }
 };
 </script>
@@ -109,6 +112,7 @@ const handleClick = (item: CoverItem): void => {
       </div>
       <STabs :model-value="activeTab" :tabs="tabs" @update:model-value="onTabSwitch" />
     </div>
+    <SAlert v-if="user.contentError" type="error">{{ user.contentError }}</SAlert>
     <!-- 未登录 -->
     <div v-if="!user.isLoggedIn" class="flex-1 flex items-center justify-center">
       <div class="text-center text-on-surface-variant/60">

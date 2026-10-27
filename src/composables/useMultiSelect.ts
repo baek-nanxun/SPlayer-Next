@@ -3,6 +3,7 @@ import type { PlaybackContext, Track, TrackSource } from "@shared/types/player";
 import type { CollectionType } from "@/types/collection";
 import { usePlaylistStore } from "@/stores/playlist";
 import { useLibraryStore } from "@/stores/library";
+import { useAccountStore } from "@/stores/account";
 import { useUserStore } from "@/stores/user";
 import { toast } from "@/composables/useToast";
 import { useDownload } from "@/composables/useDownload";
@@ -34,6 +35,7 @@ export const useMultiSelect = (items: Ref<Track[]>, options: MultiSelectOptions)
   const playlistStore = usePlaylistStore();
   const libraryStore = useLibraryStore();
   const userStore = useUserStore();
+  const account = useAccountStore();
   const { enqueueMany } = useDownload();
 
   const active = ref(false);
@@ -129,8 +131,10 @@ export const useMultiSelect = (items: Ref<Track[]>, options: MultiSelectOptions)
       } else if (options.collectionId.value) {
         if (options.source.value === "local") {
           await playlistStore.removeTracks(options.collectionId.value, ids);
-        } else if (options.source.value === "netease") {
-          await userStore.removeTracksFromPlaylist(options.collectionId.value, ids);
+        } else if (options.source.value === account.platform && account.isLoggedIn) {
+          await account.removeTracksFromPlaylist(options.collectionId.value, ids);
+        } else {
+          throw new Error(t("login.platformMismatch"));
         }
       }
       deleteConfirmOpen.value = false;

@@ -56,6 +56,25 @@ const getInstallType = (): "nsis" | "portable" | "appx" | "dmg" | "appimage" => 
 
 // 暴露给渲染进程的自定义 API
 const api = {
+  together: {
+    hostQQMusic: (
+      tracks: import("@shared/types/together").TogetherTrack[],
+      index: number,
+      position: number,
+    ): Promise<void> => ipcRenderer.invoke("together:hostQQMusic", tracks, index, position),
+    hostNetease: (): Promise<void> => ipcRenderer.invoke("together:hostNetease"),
+    status: (): Promise<import("@shared/types/together").TogetherStatus> =>
+      ipcRenderer.invoke("together:status"),
+    host: (name: string, address?: string, avatar?: string): Promise<string> =>
+      ipcRenderer.invoke("together:host", name, address, avatar),
+    join: (invite: string, name: string, avatar?: string): Promise<void> =>
+      ipcRenderer.invoke("together:join", invite, name, avatar),
+    send: (message: unknown): Promise<void> => ipcRenderer.invoke("together:send", message),
+    leave: (): Promise<void> => ipcRenderer.invoke("together:leave"),
+    onStatus: (
+      callback: (state: import("@shared/types/together").TogetherStatus) => void,
+    ): (() => void) => subscribe("together:status", callback),
+  },
   config: {
     get: (keyPath: string) => ipcRenderer.invoke("config:get", keyPath),
     set: (keyPath: string, value: unknown) => ipcRenderer.invoke("config:set", keyPath, value),

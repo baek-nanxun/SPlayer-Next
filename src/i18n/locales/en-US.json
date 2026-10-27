@@ -365,6 +365,13 @@
         "title": "Revisit your favorites~",
         "subtitle": "All your liked music · {count} tracks"
       }
+    },
+    "qqPlaylists": {
+      "title": "My QQ playlists",
+      "subtitle": "Your created and saved QQ Music playlists",
+      "liked": "Liked songs",
+      "likedDesc": "Your liked songs on QQ Music",
+      "favorites": "My favorites"
     }
   },
   "login": {
@@ -389,7 +396,27 @@
     "logout": "Sign out",
     "logoutConfirmTitle": "Sign out",
     "logoutConfirmDesc": "Sign out of the current account?",
-    "logoutDone": "Signed out"
+    "logoutDone": "Signed out",
+    "platform": "Login platform",
+    "netease": "NetEase Music",
+    "useConnectedQQ": "Use connected QQ Music account",
+    "switchAccount": "Switch account / platform",
+    "platformMismatch": "Switch to the account for this music platform. Cross-platform additions are not supported.",
+    "qqMembership": {
+      "super": "Super VIP",
+      "luxury": "Luxury Green Diamond",
+      "green": "Green Diamond",
+      "vip": "QQ Music VIP",
+      "none": "Standard account",
+      "unknown": "Membership unavailable"
+    },
+    "accounts": "Connected accounts",
+    "connectAccount": "Sign in",
+    "currentAccount": "Current",
+    "connectedAccount": "Signed in",
+    "logoutCurrent": "Sign out current account",
+    "dualAccountHint": "Keep QQ Music and NetEase signed in together. Switch accounts to view their playlists.",
+    "useConnectedAccount": "Use signed-in account: {name}"
   },
   "search": {
     "title": "Search",
@@ -2262,7 +2289,14 @@
       "button": "Clear All",
       "confirmTitle": "Clear all database caches?",
       "confirmDesc": "All database caches above will be cleared. This cannot be undone."
-    }
+    },
+    "fuckDjMode": {},
+    "uncensorProfanity": {},
+    "amllConvertExcessiveBackgroundLines": {},
+    "amllShowLineRomanization": {},
+    "amllShowWordRomanization": {},
+    "showStatsInSidebar": {},
+    "checkUpdate": {}
   },
   "collection": {
     "totalDuration": "About {time}",

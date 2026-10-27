@@ -19,12 +19,14 @@ import * as encrypt from "./crypto";
 import { getAnonymousToken, getDeviceId } from "./device";
 import { ensureXeapiKey, getXeapiSession, updateXeapiSession } from "./xeapi";
 import { getAntiCheatTokenV3 } from "./checktoken";
-import { fetchWithProxy } from "@main/utils/proxy";
 import { NeteaseRequestError, type RequestResponse } from "./response";
 import { requestWithWebClient } from "./webClient";
+import { fetchNeteaseDirect } from "./direct";
 
 /** 调用方传入的可选参数 */
 export interface RequestOptions {
+  /** 写入控制禁用自动重试，避免服务端已执行但响应丢失时重复操作 */
+  retry?: false;
   /** 网页请求由公共层匹配 SDK 规则并复用会话 */
   client?: "web";
   /** 加密方式；省略时依据路径默认规则，详见 createRequest */
@@ -182,7 +184,7 @@ export const createRequest = async (
         headers["X-antiCheatToken"] = antiCheatToken;
       }
       encryptData = encrypt.weapi(data);
-      url = (options.domain || DOMAIN) + "/weapi/" + uri.slice(5);
+      url = (options.domain || API_DOMAIN) + "/weapi/" + uri.slice(5);
       break;
     }
     case "linuxapi": {
@@ -285,11 +287,11 @@ export const createRequest = async (
 
   let res: Response | null = null;
   let lastErr: unknown = null;
-  const maxAttempts = 3;
+  const maxAttempts = options.retry === false ? 1 : 3;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      res = await fetchWithProxy(url, {
+      res = await fetchNeteaseDirect(url, {
         method: "POST",
         headers,
         body,

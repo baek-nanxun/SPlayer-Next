@@ -2,6 +2,7 @@
  * 下一首歌曲预载服务
  */
 
+import { isTogetherActive } from "./togetherBridge";
 import type { Track } from "@shared/types/player";
 import type { ResolvedTrackSource } from "@/services/audioSource";
 import { resolveTrackSource } from "@/services/audioSource";
@@ -187,6 +188,7 @@ export const finishPreparedTransition = (id: string): void => {
  * 调度下一首预载任务
  */
 export const scheduleNextTrackPreload = (): void => {
+  if (isTogetherActive()) return;
   if (transitionPreparedId) return;
   const settings = useSettingsStore();
   if (!settings.player.preloadNextTrack) {

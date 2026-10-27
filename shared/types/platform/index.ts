@@ -28,4 +28,9 @@ export interface PlatformProfile {
   avatarUrl: string;
   isVip: boolean;
   vipLevel?: number;
+  level?: number;
+  membershipType?: QQMusicMembership;
 }
+
+/** QQ 会员类型 */
+export type QQMusicMembership = "super" | "luxury" | "green" | "vip" | "none" | "unknown";

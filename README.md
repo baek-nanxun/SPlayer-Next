@@ -1,3 +1,5 @@
+> 本增强分支由 baek-nanxun 维护，新增 QQ／网易云双账号与三种一起听模式。[功能与验证范围](docs/qq-and-together-enhancements.md)
+
 <div align="center">
 
 <img alt="SPlayer-Next logo" width="120" height="120" src="public/icons/favicon.png" />

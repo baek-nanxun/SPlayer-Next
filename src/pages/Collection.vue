@@ -182,7 +182,12 @@ const moreMenuItems = computed<DropdownMenuItem[]>(() => {
   const isLocal = source === "local";
   const list: DropdownMenuItem[] = [
     { key: "batchManage", label: t("songList.batch.manage"), icon: IconLucideListChecks },
-    { key: "edit", label: editLabel.value, icon: IconLucidePencil, show: manage.canManage.value },
+    {
+      key: "edit",
+      label: editLabel.value,
+      icon: IconLucidePencil,
+      show: manage.canManage.value && source !== "qqmusic",
+    },
     {
       key: "delete",
       label: t("collection.delete", { type: typeLabel.value }),

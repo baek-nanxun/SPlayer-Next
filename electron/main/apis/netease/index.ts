@@ -13,6 +13,7 @@ import { createRequest } from "./core/request";
 import { resetXeapiKey } from "./core/xeapi";
 import { resetWebClientSession } from "./core/webClient";
 import { modules } from "./modules";
+import { listenTogetherModules } from "./modules/listentogether";
 import { neteaseLog } from "@main/utils/logger";
 import { createOption, type Query } from "./core/option";
 import { DOMAIN } from "./core/config";
@@ -35,6 +36,7 @@ const SESSION_MUTATING: ReadonlySet<string> = new Set([
 
 /** 不采用缓存的实时接口 */
 const NON_CACHEABLE: ReadonlySet<string> = new Set([
+  ...Object.keys(listenTogetherModules),
   "audio_match",
   "captcha_sent",
   "captcha_verify",

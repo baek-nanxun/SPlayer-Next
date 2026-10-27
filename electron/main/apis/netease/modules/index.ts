@@ -1,6 +1,7 @@
 /** 注册业务模块，供公共请求入口按名称路由 */
 
 import type { NeteaseModule } from "../core/types";
+import { listenTogetherModules } from "./listentogether";
 
 import captcha_sent from "./captcha_sent";
 import captcha_verify from "./captcha_verify";
@@ -94,6 +95,7 @@ import artist_sub from "./artist_sub";
 import artist_sublist from "./artist_sublist";
 
 export const modules: Record<string, NeteaseModule> = {
+  ...listenTogetherModules,
   captcha_sent,
   captcha_verify,
   login,

@@ -365,6 +365,13 @@
         "title": "听听你喜欢的音乐吧~",
         "subtitle": "你收藏的全部音乐 · {count} 首"
       }
+    },
+    "qqPlaylists": {
+      "title": "我的 QQ 歌单",
+      "subtitle": "来自 QQ 音乐的自建与收藏歌单",
+      "liked": "我喜欢的音乐",
+      "likedDesc": "听听你在 QQ 音乐喜欢的歌曲",
+      "favorites": "我的收藏"
     }
   },
   "login": {
@@ -389,7 +396,27 @@
     "logout": "退出登录",
     "logoutConfirmTitle": "退出登录",
     "logoutConfirmDesc": "确认退出当前账号？",
-    "logoutDone": "已退出登录"
+    "logoutDone": "已退出登录",
+    "platform": "登录平台",
+    "netease": "网易云音乐",
+    "useConnectedQQ": "使用已连接的 QQ 音乐账号",
+    "switchAccount": "切换账号 / 平台",
+    "platformMismatch": "请切换到歌曲所属平台的账号，不支持跨平台添加歌曲",
+    "qqMembership": {
+      "super": "超级会员",
+      "luxury": "豪华绿钻",
+      "green": "绿钻",
+      "vip": "QQ 音乐会员",
+      "none": "普通用户",
+      "unknown": "会员状态未知"
+    },
+    "accounts": "已连接账号",
+    "connectAccount": "点击登录",
+    "currentAccount": "当前",
+    "connectedAccount": "已登录",
+    "logoutCurrent": "退出当前账号",
+    "dualAccountHint": "QQ 音乐和网易云可同时保持登录，切换账号查看各自的歌单。",
+    "useConnectedAccount": "使用已登录账号：{name}"
   },
   "search": {
     "title": "搜索",
@@ -2262,7 +2289,14 @@
       "button": "清空全部",
       "confirmTitle": "清空全部数据库缓存？",
       "confirmDesc": "将删除上方全部数据库缓存，操作不可恢复"
-    }
+    },
+    "fuckDjMode": {},
+    "uncensorProfanity": {},
+    "amllConvertExcessiveBackgroundLines": {},
+    "amllShowLineRomanization": {},
+    "amllShowWordRomanization": {},
+    "showStatsInSidebar": {},
+    "checkUpdate": {}
   },
   "collection": {
     "totalDuration": "约 {time}",

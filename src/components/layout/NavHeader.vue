@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useTogetherStore } from "@/stores/together";
 import { useSettingsDialog } from "@/settings/useSettingsDialog";
 import { useWindowControls } from "@/composables/useWindowControls";
 import { useThemeStore } from "@/stores/theme";
@@ -12,6 +13,8 @@ import IconTerminal from "~icons/lucide/terminal";
 import IconSettings from "~icons/lucide/settings";
 import IconScaling from "~icons/lucide/scaling";
 
+const together = useTogetherStore();
+const togetherOpen = ref(false);
 const router = useRouter();
 const { t } = useI18n();
 const { show: showSettings } = useSettingsDialog();
@@ -98,6 +101,37 @@ const onMenuSelect = (key: string): void => {
     <div class="flex-1 h-full min-w-4" />
     <!-- 右侧 -->
     <div class="flex items-center gap-2 sm:gap-3 shrink-0">
+      <SButton
+        class="app-no-drag shrink-0"
+        variant="tertiary"
+        :title="'一起听 · ' + together.durationLabel"
+        @click="togetherOpen = true"
+      >
+        <TogetherAvatars
+          v-if="together.state.connection !== 'idle'"
+          :members="together.state.snapshot?.members || []"
+          compact
+        />
+        <IconLucideHeadphones v-else class="size-5" />
+        <span class="lt-md:hidden tabular-nums">
+          {{ together.state.connection === "idle" ? "一起听" : together.durationLabel }}
+        </span>
+      </SButton>
+      <SButton
+        v-if="
+          together.state.connection !== 'idle' &&
+          together.state.mode !== 'netease' &&
+          together.state.mode !== 'qqmusic'
+        "
+        class="app-no-drag"
+        variant="ghost"
+        circle
+        :size="36"
+        title="一起听聊天"
+        @click="together.chatOpen = !together.chatOpen"
+      >
+        <template #icon><IconLucideMessageCircle /></template>
+      </SButton>
       <NavUser />
       <SDropdownMenu :items="menuItems" @select="onMenuSelect">
         <template #trigger>
@@ -109,6 +143,8 @@ const onMenuSelect = (key: string): void => {
       <SDivider v-if="isBorderless" vertical />
       <WindowControls />
     </div>
+    <TogetherChatPanel />
+    <TogetherDialog v-model:open="togetherOpen" />
     <UiZoomDialog v-model:open="uiZoomOpen" />
   </div>
 </template>

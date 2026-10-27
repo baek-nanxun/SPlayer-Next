@@ -68,10 +68,11 @@ export const fetchQQMusicLoginStatus = async (): Promise<PlatformProfile | null>
     if (data?.code === 200 && data.loggedIn && data.profile) {
       return data.profile;
     }
-    return null;
+    if (data?.code === 301) return null;
+    throw new Error(data?.message || "QQ 音乐账号校验失败");
   } catch (err) {
     console.warn("[qqmusic] fetch login status failed:", err);
-    return null;
+    throw err;
   }
 };
 

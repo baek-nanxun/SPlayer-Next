@@ -12,6 +12,8 @@ import { useFloatingPlayerBar } from "@/composables/useFloatingPlayerBar";
 import { navigateToPlaylist, navigateToArtist, navigateToAlbum } from "@/utils/navigate";
 import * as player from "@/core/player";
 
+import { useAccountStore } from "@/stores/account";
+const account = useAccountStore();
 const { t } = useI18n();
 const { isFloatingBar } = useFloatingPlayerBar();
 
@@ -62,17 +64,17 @@ const trackNo = (index: number): string => String(index + 1).padStart(2, "0");
 
 /** 打开歌单详情 */
 const openPlaylist = (item: CoverItem): void => {
-  navigateToPlaylist(item.id, { source: "netease", name: item.title });
+  navigateToPlaylist(item.id, { source: account.platform, name: item.title });
 };
 
 /** 打开歌手页 */
 const openArtist = (item: CoverItem): void => {
-  navigateToArtist(item.title, { source: "netease", artistId: item.id });
+  navigateToArtist(item.title, { source: account.platform, artistId: item.id });
 };
 
 /** 打开专辑页 */
 const openAlbum = (item: CoverItem): void => {
-  navigateToAlbum(item.title, { source: "netease", albumId: item.id });
+  navigateToAlbum(item.title, { source: account.platform, albumId: item.id });
 };
 </script>
 

@@ -3,6 +3,9 @@
  */
 
 import type { QMModule } from "../core/types";
+import together from "./together";
+
+import { account } from "./account";
 
 import hot_search from "./hot_search";
 import leaderboard from "./leaderboard";
@@ -19,6 +22,8 @@ import comment from "./comment";
 import { login_qr_key, login_qr_check } from "./login_qr";
 
 export const modules: Record<string, QMModule> = {
+  together,
+  account,
   hot_search,
   leaderboard,
   lyric,

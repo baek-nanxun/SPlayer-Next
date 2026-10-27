@@ -1,3 +1,4 @@
+import { isTogetherActive } from "@/services/togetherBridge";
 import { queueEntries } from "@/stores/queue";
 import type { PlayerEvent } from "@shared/types/player";
 import i18n from "@/i18n";
@@ -39,6 +40,7 @@ let endedGuard = false;
 
 /** 按当前播放模式结算并进入下一步 */
 const finishCurrentTrack = async (): Promise<void> => {
+  if (isTogetherActive()) return;
   const status = useStatusStore();
   if (endedGuard) return;
   endedGuard = true;
@@ -140,11 +142,24 @@ export const handleEvent = async (event: PlayerEvent): Promise<void> => {
       playback.setFftFrame(event.data.ldata, event.data.rdata);
       break;
     case "ended": {
+      if (isTogetherActive()) {
+        void window.api.together.send({ type: "ended" }).catch(() => {});
+        break;
+      }
       if (isSmartTransitionActive()) break;
       await finishCurrentTrack();
       break;
     }
     case "sourceError":
+      if (isTogetherActive()) {
+        void window.api.together.send({ type: "unavailable" }).catch(() => {});
+        toast.warning("本机音源连接中断，正在恢复；听友将继续播放");
+        status.state = "paused";
+        status.currentSource = null;
+        playback.setPlaying(false);
+        void window.api.player.pause();
+        break;
+      }
       // 音源失效（网络中断 / URL 过期）
       await recoverFromSourceFailure();
       break;

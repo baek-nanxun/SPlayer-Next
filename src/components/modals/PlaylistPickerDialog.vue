@@ -2,7 +2,7 @@
 import type { Track } from "@shared/types/player";
 import type { ContentScope } from "@/types/collection";
 import { usePlaylistStore } from "@/stores/playlist";
-import { useUserStore } from "@/stores/user";
+import { useAccountStore } from "@/stores/account";
 import { toast } from "@/composables/useToast";
 import PlaylistCreateDialog from "./PlaylistCreateDialog.vue";
 import IconLucidePlus from "~icons/lucide/plus";
@@ -18,7 +18,7 @@ const emit = defineEmits<{ "update:open": [value: boolean] }>();
 
 const { t } = useI18n();
 const playlistStore = usePlaylistStore();
-const userStore = useUserStore();
+const userStore = useAccountStore();
 
 /** 列表项的统一形状 */
 interface PickerEntry {
@@ -44,7 +44,7 @@ const entries = computed<PickerEntry[]>(() => {
       (pl): pl is typeof pl & { id: string } => !!pl.id && pl.id !== userStore.likedPlaylistId,
     )
     .map((pl) => ({
-      id: pl.id,
+      id: pl.id!,
       name: pl.name,
       cover: pl.cover,
       trackCount: pl.trackCount ?? 0,
@@ -66,6 +66,11 @@ const handlePick = async (playlistId: string): Promise<void> => {
     if (props.mode === "local") {
       count = await playlistStore.addTracks(playlistId, props.tracks);
     } else {
+      if (
+        !userStore.isLoggedIn ||
+        props.tracks.some((track) => track.source !== userStore.platform)
+      )
+        throw new Error(t("login.platformMismatch"));
       const ids = props.tracks.map((track) => track.id);
       count = await userStore.addTracksToPlaylist(playlistId, ids);
     }

@@ -2,7 +2,7 @@ import { createCipheriv } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({ fetch: vi.fn(), v3: vi.fn(), web: vi.fn() }));
-vi.mock("@main/utils/proxy", () => ({ fetchWithProxy: api.fetch }));
+vi.mock("./direct", () => ({ fetchNeteaseDirect: api.fetch }));
 vi.mock("./webClient", () => ({ requestWithWebClient: api.web }));
 vi.mock("./checktoken", () => ({ getAntiCheatTokenV3: api.v3 }));
 vi.mock("./device", () => ({ getAnonymousToken: () => "", getDeviceId: () => "device" }));
@@ -24,6 +24,14 @@ describe("平台请求协议与解析", () => {
     expect(api.web).toHaveBeenCalledWith("/api/artist/sub", data, options);
     expect(api.fetch).not.toHaveBeenCalled();
     expect(api.v3).not.toHaveBeenCalled();
+  });
+
+  it("官方房间写入连接失败时不自动重复请求", async () => {
+    api.fetch.mockRejectedValueOnce(new Error("连接中断"));
+    await expect(
+      createRequest("/api/listen/together/room/create", {}, { retry: false }),
+    ).rejects.toMatchObject({ response: { status: 502 } });
+    expect(api.fetch).toHaveBeenCalledOnce();
   });
 
   it("原收藏请求不获取反作弊凭据", async () => {

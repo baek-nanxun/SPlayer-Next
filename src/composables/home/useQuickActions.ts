@@ -1,4 +1,4 @@
-import { useUserStore } from "@/stores/user";
+import { useAccountStore } from "@/stores/account";
 import { useHeartMode } from "@/composables/useHeartMode";
 import { useFmMode } from "@/composables/useFmMode";
 import { toast } from "@/composables/useToast";
@@ -14,7 +14,7 @@ import IconRadio from "~icons/lucide/radio";
 export const useQuickActions = () => {
   const { t } = useI18n();
   const router = useRouter();
-  const user = useUserStore();
+  const user = useAccountStore();
   const { enterHeartMode } = useHeartMode();
   const { enterFmMode } = useFmMode();
 
@@ -47,32 +47,55 @@ export const useQuickActions = () => {
   const playFm = useThrottleFn(() => enterFmMode(), 800);
 
   /** 快捷入口列表 */
-  const quickActions = computed(() => [
-    {
-      icon: IconDices,
-      title: t("home.quickActions.luck.title"),
-      desc: t("home.quickActions.luck.desc"),
-      run: playLucky,
-    },
-    {
-      icon: IconCalendarDays,
-      title: t("home.quickActions.daily.title"),
-      desc: t("home.quickActions.daily.desc"),
-      run: () => router.push("/daily"),
-    },
-    {
-      icon: IconHeart,
-      title: t("home.quickActions.heartMode.title"),
-      desc: t("home.quickActions.heartMode.desc"),
-      run: playHeartMode,
-    },
-    {
-      icon: IconRadio,
-      title: t("home.quickActions.fm.title"),
-      desc: t("home.quickActions.fm.desc"),
-      run: playFm,
-    },
-  ]);
+  const quickActions = computed(() =>
+    user.platform === "qqmusic"
+      ? [
+          {
+            icon: IconDices,
+            title: t("home.quickActions.luck.title"),
+            desc: t("home.quickActions.luck.desc"),
+            run: playLucky,
+          },
+          {
+            icon: IconHeart,
+            title: t("home.qqPlaylists.liked"),
+            desc: t("home.qqPlaylists.likedDesc"),
+            run: () => router.push("/liked"),
+          },
+          {
+            icon: IconCalendarDays,
+            title: t("home.qqPlaylists.favorites"),
+            desc: t("home.qqPlaylists.subtitle"),
+            run: () => router.push("/favorites"),
+          },
+        ]
+      : [
+          {
+            icon: IconDices,
+            title: t("home.quickActions.luck.title"),
+            desc: t("home.quickActions.luck.desc"),
+            run: playLucky,
+          },
+          {
+            icon: IconCalendarDays,
+            title: t("home.quickActions.daily.title"),
+            desc: t("home.quickActions.daily.desc"),
+            run: () => router.push("/daily"),
+          },
+          {
+            icon: IconHeart,
+            title: t("home.quickActions.heartMode.title"),
+            desc: t("home.quickActions.heartMode.desc"),
+            run: playHeartMode,
+          },
+          {
+            icon: IconRadio,
+            title: t("home.quickActions.fm.title"),
+            desc: t("home.quickActions.fm.desc"),
+            run: playFm,
+          },
+        ],
+  );
 
   return { quickActions };
 };

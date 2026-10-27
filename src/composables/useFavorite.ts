@@ -1,6 +1,6 @@
 import type { Track } from "@shared/types/player";
 import { useLibraryStore } from "@/stores/library";
-import { useUserStore } from "@/stores/user";
+import { useAccountStore } from "@/stores/account";
 import { useSettingsStore } from "@/stores/settings";
 import { toast } from "@/composables/useToast";
 import i18n from "@/i18n";
@@ -21,7 +21,7 @@ const recordFavoriteChange = (track: Track, liked: boolean): void => {
  */
 export const useFavorite = () => {
   const library = useLibraryStore();
-  const user = useUserStore();
+  const user = useAccountStore();
   const settings = useSettingsStore();
   const streaming = useStreamingStore();
   const t = (key: string): string => i18n.global.t(key);
@@ -46,7 +46,7 @@ export const useFavorite = () => {
   const isLiked = (track: Track | null | undefined): boolean => {
     if (!track) return false;
     if (track.source === "local") return library.isLiked(track.id);
-    if (track.source === "netease") return user.isLiked(track.id);
+    if (track.source === user.platform) return user.isLiked(track.id);
     if (track.source === "streaming") return streaming.isFavorite(track);
     return false;
   };
@@ -59,7 +59,7 @@ export const useFavorite = () => {
   const isSupported = (track: Track | null | undefined): boolean => {
     if (!track) return false;
     if (track.source === "local") return true;
-    if (track.source === "netease") return user.isLoggedIn;
+    if (track.source === user.platform) return user.isLoggedIn;
     if (track.source === "streaming")
       return Boolean(
         track.serverId &&
@@ -95,7 +95,7 @@ export const useFavorite = () => {
       toast.success(t(next ? "liked.toast.added" : "liked.toast.removed"));
       return;
     }
-    if (track.source === "netease") {
+    if (track.source === user.platform) {
       if (user.isLikePending(track.id)) return;
       if (!user.isLoggedIn) {
         toast.warning(t("liked.toast.needLogin"));

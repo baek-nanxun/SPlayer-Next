@@ -7,6 +7,8 @@
  * - id  disstid（歌单 ID，必填）
  */
 
+import { getQQMusicCookies } from "../core/request";
+import { sessionToCookieHeader } from "../core/credential";
 import { QM_HEADERS, formatSingerName } from "../core/config";
 import type { QMSong } from "@shared/types/platform/qqmusic";
 import type { QMModule } from "../core/types";
@@ -58,7 +60,11 @@ const songList: QMModule = async (params) => {
 
   const url = `${SONGLIST_URL}&disstid=${encodeURIComponent(String(id ?? ""))}`;
   const res = await fetch(url, {
-    headers: { ...QM_HEADERS, Referer: "https://y.qq.com/" },
+    headers: {
+      ...QM_HEADERS,
+      Referer: "https://y.qq.com/",
+      Cookie: sessionToCookieHeader(getQQMusicCookies()) ?? "",
+    },
     signal: AbortSignal.timeout(8000),
   });
   if (!res.ok) throw new Error(`QM 歌单请求失败: HTTP ${res.status}`);

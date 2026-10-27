@@ -5,7 +5,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { fetchWithProxy } from "@main/utils/proxy";
+import { fetchNeteaseDirect } from "@main/apis/netease/core/direct";
 import type { NeteaseModule } from "../core/types";
 
 const MATCH_URL = "https://interface.music.163.com/api/music/audio/match";
@@ -30,7 +30,7 @@ const audioMatch: NeteaseModule = async (query) => {
     times: "1",
     decrypt: "1",
   });
-  const response = await fetchWithProxy(`${MATCH_URL}?${params}`, {
+  const response = await fetchNeteaseDirect(`${MATCH_URL}?${params}`, {
     headers: {
       Accept: "application/json",
       Referer: "https://music.163.com/",

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ContentScope } from "@/types/collection";
 import { usePlaylistStore } from "@/stores/playlist";
-import { useUserStore } from "@/stores/user";
+import { useAccountStore } from "@/stores/account";
 import { toast } from "@/composables/useToast";
 
 const props = defineProps<{
@@ -19,7 +19,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const playlistStore = usePlaylistStore();
-const userStore = useUserStore();
+const userStore = useAccountStore();
 
 const scope = ref<ContentScope>(props.mode);
 const name = ref("");
@@ -30,7 +30,9 @@ const typeTabs = computed(() => [
   { key: "local", label: t("collection.localPlaylist") },
   { key: "online", label: t("collection.onlinePlaylist") },
 ]);
-const canSubmit = computed(() => Boolean(name.value.trim()));
+const canSubmit = computed(
+  () => Boolean(name.value.trim()) && (scope.value === "local" || userStore.isLoggedIn),
+);
 
 watch(
   () => props.open,
@@ -109,7 +111,7 @@ const handleConfirm = async (): Promise<void> => {
               @keyup.enter="handleConfirm"
             />
           </label>
-          <div class="flex items-center gap-2">
+          <div v-if="userStore.platform === 'netease'" class="flex items-center gap-2">
             <span class="text-on-surface">{{ t("collection.privacy.private") }}</span>
             <SSwitch
               :model-value="privacy === 10"

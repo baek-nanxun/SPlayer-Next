@@ -2,7 +2,7 @@ import { createCipheriv } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({ fetch: vi.fn() }));
-vi.mock("@main/utils/proxy", () => ({ fetchWithProxy: api.fetch }));
+vi.mock("./direct", () => ({ fetchNeteaseDirect: api.fetch }));
 
 import { xeapiSign } from "./crypto";
 import { ensureXeapiKey, getXeapiSession, resetXeapiKey, updateXeapiSession } from "./xeapi";

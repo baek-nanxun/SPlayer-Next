@@ -7,7 +7,7 @@
 
 import { API_DOMAIN, UA_MAP } from "./config";
 import { xeapiSign, xeapiDecryptPublicKey, type XeapiPublicKey } from "./crypto";
-import { fetchWithProxy } from "@main/utils/proxy";
+import { fetchNeteaseDirect } from "@main/apis/netease/core/direct";
 
 let publicKeyState: XeapiPublicKey | null = null;
 let sessionId = "";
@@ -43,7 +43,7 @@ const fetchPublicKey = async (
     uid: "",
   };
 
-  const res = await fetchWithProxy(`${API_DOMAIN}/api/bsr/sk/get`, {
+  const res = await fetchNeteaseDirect(`${API_DOMAIN}/api/bsr/sk/get`, {
     method: "POST",
     headers: {
       "User-Agent": UA_MAP.api.android,

@@ -1,12 +1,6 @@
 /**
- * QM 主进程服务
- *
- * 与 netease 不同之处：
- * - 无持久化 session（uid/sid 是匿名态，内存缓存 1h 足够）
- * - 无 cookie 登录态（播放 URL 由插件实现，不走账号）
- * - 走 fetch 原生 HTTP，无加密 body（靠 UA + comm 伪装）
- *
- * 统一入口：callQQMusic(name, params)
+ * QQ 音乐主进程服务，统一分发账号、曲库与一起听请求
+ * 账号写操作和房间状态绕过响应缓存，避免吞掉重复操作或返回过期状态
  */
 
 import { createHash } from "node:crypto";
@@ -29,6 +23,8 @@ const cache = new Map<string, CacheEntry>();
 
 /** 不缓存的实时接口 */
 const NON_CACHEABLE: ReadonlySet<string> = new Set([
+  "account",
+  "together",
   "user_detail",
   "song_url",
   "comment",
@@ -67,9 +63,9 @@ export const clearQQMusicCache = (): void => {
 };
 
 /**
- * 调用任意 QM API
- * @param name  见 modules/index.ts 中的 key（search / song_info / lyric / match / hot_search / leaderboard / song_list / user_detail / song_url）
- * @param params 业务参数；不想命中缓存可传 `timestamp: Date.now()`
+ * 调用已注册的 QQ 音乐接口
+ * @param name - modules/index.ts 中注册的接口名称
+ * @param params - 业务参数，账号与实时接口自动跳过缓存
  */
 export const callQQMusic = async (name: string, params: QMParams = {}): Promise<any> => {
   // hasOwn 守卫

@@ -5,7 +5,7 @@ import type { PlaybackContext, Track } from "@shared/types/player";
 import type { ContentScope } from "@/types/collection";
 import type { DropdownMenuItem } from "@/components/ui/SDropdownMenu.vue";
 import { useLibraryStore } from "@/stores/library";
-import { useUserStore } from "@/stores/user";
+import { useAccountStore } from "@/stores/account";
 import { useStatusStore } from "@/stores/status";
 import SongList from "@/components/list/SongList.vue";
 import * as player from "@/core/player";
@@ -14,7 +14,7 @@ import IconLucideRefreshCw from "~icons/lucide/refresh-cw";
 
 const { t } = useI18n();
 const library = useLibraryStore();
-const user = useUserStore();
+const user = useAccountStore();
 const status = useStatusStore();
 
 /** 当前 tab */
@@ -65,7 +65,7 @@ const playbackContext = computed<PlaybackContext | undefined>(() => {
   }
   if (!user.likedPlaylistId) return undefined;
   return {
-    provider: "netease",
+    provider: user.platform,
     originId: user.likedPlaylistId,
     originType: "playlist",
     originName: t("liked.title"),
@@ -112,6 +112,9 @@ const handleMoreMenu = (key: string): void => {
 
 <template>
   <div class="flex flex-col h-full">
+    <SAlert v-if="tab === 'online' && user.contentError" type="error">
+      {{ user.contentError }}
+    </SAlert>
     <!-- 顶栏 -->
     <div class="shrink-0 px-5 pb-2">
       <div class="flex items-center justify-between mt-2 mb-4">
@@ -213,7 +216,7 @@ const handleMoreMenu = (key: string): void => {
           ref="songListRef"
           :items="user.likedPlaylistTracks"
           :search-query="searchQuery"
-          source="netease"
+          :source="user.platform"
           :collection-id="user.likedPlaylistId ?? undefined"
           :playback-context="playbackContext"
           collection-type="playlist"
