@@ -116,6 +116,8 @@ describe("切歌消费真实预载", () => {
     mocks.media.track = { ...mocks.track, id: "old" };
     mocks.status.currentTrack = { ...mocks.track, id: "old" };
     mocks.status.playIndex = 0;
+    mocks.status.shuffleMode = "off";
+    mocks.status.repeatMode = "off";
     mocks.load.mockResolvedValue({
       success: true,
       data: { detail: {}, mediaInfo: { duration: 1000 } },
@@ -718,6 +720,80 @@ describe("一起听共享队列操作", () => {
       ]);
       expect(commands.mock.calls[2][0].position).toBe("end");
       expect(commands.mock.calls.some((c) => c[0].type === "queue")).toBe(false);
+    } finally {
+      setTogetherControl(null);
+    }
+  });
+});
+
+describe("一起听模式与展示资料", () => {
+  it("共享快照保留随机模式与封面，切歌不会强制重置成顺序", async () => {
+    const { useStatusStore } = await import("@/stores/status");
+    const status = useStatusStore();
+    const syncPlayMode = vi.fn();
+    const seek = vi.fn().mockResolvedValue({ success: true });
+    status.speed = 1;
+    status.state = "playing";
+    status.currentSource = "old";
+    mocks.media.track = { ...mocks.track, id: "old" };
+    Object.assign(window, {
+      api: {
+        player: {
+          syncPlayMode,
+          seek,
+          play: async () => ({ success: true }),
+          pause: async () => ({ success: true }),
+        },
+      },
+    });
+    const { applyTogetherSnapshot } = await import("./index");
+    const snapshot: import("@shared/types/together").TogetherSnapshot = {
+      revision: 1,
+      queueRevision: 1,
+      shuffleMode: "on",
+      repeatMode: "list",
+      serverTime: 0,
+      position: 100,
+      playing: true,
+      desiredPlaying: true,
+      index: 0,
+      tracks: [
+        {
+          ...(mocks.track as Track),
+          id: "old",
+          cover: "https://y.gtimg.cn/cover.jpg",
+          album: { name: "专辑" },
+        },
+      ],
+      members: [],
+      elapsedMs: 0,
+      counting: false,
+      chat: [],
+    };
+    await applyTogetherSnapshot(snapshot, () => true);
+    await applyTogetherSnapshot({ ...snapshot, revision: 2, position: 200 }, () => true);
+    expect(status.shuffleMode).toBe("on");
+    expect(status.repeatMode).toBe("list");
+    expect(syncPlayMode).toHaveBeenLastCalledWith("list", "on");
+    expect(mocks.media.track).toMatchObject({
+      cover: "https://y.gtimg.cn/cover.jpg",
+      album: { name: "专辑" },
+    });
+    expect(seek).toHaveBeenCalledTimes(2);
+  });
+
+  it("在房间中切换随机和循环只发送共享命令，不在本机单独洗牌", async () => {
+    const { setTogetherControl } = await import("@/services/togetherBridge");
+    const { setShuffleMode, setRepeatMode } = await import("./index");
+    const send = vi.fn();
+    setTogetherControl(send);
+    try {
+      setShuffleMode("on");
+      setRepeatMode("one");
+      expect(send.mock.calls.map(([command]) => command)).toEqual([
+        { type: "mode", shuffleMode: "on" },
+        { type: "mode", repeatMode: "one" },
+      ]);
     } finally {
       setTogetherControl(null);
     }

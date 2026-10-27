@@ -33,6 +33,16 @@ export const cleanTracks = (value: unknown): TogetherTrack[] => {
       duration: v.duration,
       extId: typeof v.extId === "string" ? v.extId.slice(0, 80) : undefined,
       mediaId: typeof v.mediaId === "string" ? v.mediaId.slice(0, 80) : undefined,
+      cover: cleanAvatar(v.cover) ?? cleanAvatar(v.album?.cover),
+      album:
+        v.album && typeof v.album.name === "string"
+          ? {
+              id: typeof v.album.id === "string" ? v.album.id.slice(0, 80) : undefined,
+              name: v.album.name.slice(0, 200),
+              cover: cleanAvatar(v.album.cover),
+            }
+          : undefined,
+      fee: Number.isSafeInteger(v.fee) && v.fee >= 0 ? v.fee : undefined,
       artists: Array.isArray(v.artists)
         ? v.artists
             .slice(0, 20)
@@ -75,6 +85,9 @@ export class TogetherRoom {
   position = 0;
   playing = false;
   desiredPlaying = false;
+  shuffleMode: "off" | "on" = "off";
+  repeatMode: "list" | "one" = "list";
+  private originalOrder: string[] = [];
   elapsedMs = 0;
   updatedAt: number;
   members = new Map<
@@ -82,7 +95,10 @@ export class TogetherRoom {
     { name: string; online: boolean; ready: boolean; seen: number; avatar?: string }
   >();
   chat: TogetherSnapshot["chat"] = [];
-  constructor(private clock: () => number = Date.now) {
+  constructor(
+    private clock: () => number = Date.now,
+    private random: () => number = Math.random,
+  ) {
     this.updatedAt = clock();
   }
   /** 结算当前区间，暂停和单人在线均不累计 */
@@ -105,6 +121,8 @@ export class TogetherRoom {
     return {
       revision: this.revision,
       queueRevision: this.queueRevision,
+      shuffleMode: this.shuffleMode,
+      repeatMode: this.repeatMode,
       serverTime: this.updatedAt,
       position: this.position,
       playing: this.playing,
@@ -193,6 +211,25 @@ export class TogetherRoom {
     const member = this.members.get(id);
     if (member) member.ready = false;
   }
+  /** 当前曲目置顶后洗牌其余曲目，双方共用一份播放顺序 */
+  private shuffle(): void {
+    const current = this.tracks[this.index];
+    const rest = this.tracks.filter((_, i) => i !== this.index);
+    for (let i = rest.length - 1; i > 0; i--) {
+      const j = Math.floor(this.random() * (i + 1));
+      [rest[i], rest[j]] = [rest[j], rest[i]];
+    }
+    this.tracks = current ? [current, ...rest] : rest;
+    this.index = 0;
+  }
+  /** 保留未洗牌顺序，新加曲目和移除曲目也参与恢复 */
+  private rememberOrder(): void {
+    const keys = this.tracks.map((t) => `${t.source}:${t.id}`);
+    const existing = new Set(keys);
+    this.originalOrder = this.originalOrder.filter((key) => existing.has(key));
+    const remembered = new Set(this.originalOrder);
+    this.originalOrder.push(...keys.filter((key) => !remembered.has(key)));
+  }
   /** 串行接受任一成员的控制，相同权限且服务器最后接收的操作生效
    * @param id - 发起成员
    * @param command - 播放操作
@@ -201,6 +238,35 @@ export class TogetherRoom {
     if (!this.members.get(id)?.online) throw new Error("请先加入房间");
     this.settle();
     switch (command.type) {
+      case "mode": {
+        if (
+          (command.shuffleMode === undefined && command.repeatMode === undefined) ||
+          (command.shuffleMode !== undefined && !["off", "on"].includes(command.shuffleMode)) ||
+          (command.repeatMode !== undefined && !["list", "one"].includes(command.repeatMode))
+        )
+          throw new Error("播放模式无效");
+        if (command.shuffleMode !== undefined && command.shuffleMode !== this.shuffleMode) {
+          if (command.shuffleMode === "on") {
+            this.originalOrder = this.tracks.map((t) => `${t.source}:${t.id}`);
+            this.shuffle();
+          } else {
+            this.rememberOrder();
+            const current = this.tracks[this.index];
+            const order = new Map(this.originalOrder.map((key, i) => [key, i]));
+            this.tracks = [...this.tracks].sort(
+              (a, b) => order.get(`${a.source}:${a.id}`)! - order.get(`${b.source}:${b.id}`)!,
+            );
+            this.index = Math.max(
+              0,
+              this.tracks.findIndex((t) => sameTrack(t, current)),
+            );
+          }
+          this.shuffleMode = command.shuffleMode;
+        }
+        if (command.repeatMode !== undefined) this.repeatMode = command.repeatMode;
+        this.queueRevision++;
+        return;
+      }
       case "queue": {
         const tracks = cleanTracks(command.tracks);
         if (!Number.isInteger(command.index) || command.index < 0 || command.index >= tracks.length)
@@ -208,6 +274,8 @@ export class TogetherRoom {
         this.tracks = tracks;
         this.queueRevision++;
         this.index = command.index;
+        this.originalOrder = this.tracks.map((t) => `${t.source}:${t.id}`);
+        if (this.shuffleMode === "on") this.shuffle();
         this.position = 0;
         this.desiredPlaying = true;
         break;
@@ -312,7 +380,13 @@ export class TogetherRoom {
   tick(): boolean {
     this.settle();
     if (this.playing && this.position >= this.tracks[this.index].duration) {
-      this.index = (this.index + 1) % this.tracks.length;
+      if (this.repeatMode !== "one") {
+        if (this.shuffleMode === "on" && this.index === this.tracks.length - 1) {
+          this.shuffle();
+          this.queueRevision++;
+        }
+        this.index = (this.index + 1) % this.tracks.length;
+      }
       this.position = 0;
       this.rebuffer();
       return true;
@@ -335,6 +409,7 @@ export const startTogetherServer = async (port = 0, host = "0.0.0.0") => {
     perMessageDeflate: false,
   });
   const peers = new Map<WebSocket, { id: string; alive: boolean; messages: number }>();
+  let chatId = 0;
   /** 向已认证成员广播共享快照 */
   const publish = (): void => {
     const frame = JSON.stringify({ type: "state", state: room.snapshot() });
@@ -402,7 +477,7 @@ export const startTogetherServer = async (port = 0, host = "0.0.0.0") => {
           room.chat = [
             ...room.chat.slice(-49),
             {
-              id: Date.now(),
+              id: ++chatId,
               name: room.members.get(p.id)!.name,
               text: msg.text.trim().slice(0, 500),
             },

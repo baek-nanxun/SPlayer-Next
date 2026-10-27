@@ -385,6 +385,8 @@ export class QQMusicTogether {
       }
       case "clear":
         throw new Error("QQ 官方房间暂不支持清空队列，请播放另一个歌单");
+      case "mode":
+        throw new Error("官方房间暂不支持同步播放模式，请使用自建房间");
     }
     if (!Number.isSafeInteger(index) || index < 0 || index >= tracks.length)
       throw new Error("QQ 官方歌曲索引无效");

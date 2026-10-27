@@ -1,4 +1,4 @@
-import type { Track } from "./player";
+import type { RepeatMode, ShuffleMode, Track } from "./player";
 
 /** 共享队列和单帧大小保持有界，覆盖普通大型歌单 */
 export const TOGETHER_MAX_TRACKS = 2000;
@@ -21,6 +21,7 @@ export type TogetherTrack = Pick<
 export type TogetherCommand =
   | { type: "play" | "pause" | "next" | "prev" }
   | { type: "seek"; position: number }
+  | { type: "mode"; shuffleMode?: ShuffleMode; repeatMode?: RepeatMode }
   | { type: "queue"; tracks: TogetherTrack[]; index: number }
   | { type: "enqueue"; tracks: TogetherTrack[]; position: "next" | "end" }
   | { type: "playTrack"; track: TogetherTrack }
@@ -34,6 +35,8 @@ export type TogetherCommand =
 export interface TogetherSnapshot {
   revision: number;
   queueRevision: number;
+  shuffleMode?: ShuffleMode;
+  repeatMode?: RepeatMode;
   serverTime: number;
   position: number;
   playing: boolean;

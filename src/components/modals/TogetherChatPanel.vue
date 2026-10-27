@@ -3,6 +3,7 @@ import { useTogetherStore } from "@/stores/together";
 import { toast } from "@/composables/useToast";
 const room = useTogetherStore();
 const text = ref("");
+const sending = ref(false);
 const messages = useTemplateRef("messages");
 watch(
   () => room.state.snapshot?.chat.length,
@@ -13,12 +14,17 @@ watch(
 );
 /** 发送一条房间消息 */
 const send = async (): Promise<void> => {
-  if (!text.value.trim()) return;
+  if (!text.value.trim() || sending.value || room.state.connection !== "connected") return;
+  const message = text.value;
+  sending.value = true;
+  text.value = "";
   try {
-    await window.api.together.send({ type: "chat", text: text.value });
-    text.value = "";
+    await window.api.together.send({ type: "chat", text: message });
   } catch (e) {
+    if (!text.value) text.value = message;
     toast.error(String(e));
+  } finally {
+    sending.value = false;
   }
 };
 </script>
@@ -81,9 +87,9 @@ const send = async (): Promise<void> => {
           <SInput v-model="text" placeholder="说点什么…" :maxlength="500" />
           <SButton
             circle
-            :disabled="room.state.connection !== 'connected' || !text.trim()"
+            :disabled="room.state.connection !== 'connected' || !text.trim() || sending"
+            :loading="sending"
             title="发送"
-            @click="send"
           >
             <template #icon><IconLucideSend class="size-4" /></template>
           </SButton>

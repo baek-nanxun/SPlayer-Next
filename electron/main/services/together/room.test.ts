@@ -165,6 +165,10 @@ test("真实 WebSocket 双人控制、聊天、断线重连与房间隔离", asy
     await until(() => a.states.at(-1)?.desiredPlaying === false);
     b.send({ type: "chat", text: "一起听" });
     await until(() => a.states.at(-1)?.chat[0]?.text === "一起听");
+    a.send({ type: "chat", text: "第二条" });
+    await until(() => b.states.at(-1)?.chat.length === 2);
+    assert.equal(a.states.at(-1)!.chat.length, 2);
+    assert.notEqual(b.states.at(-1)!.chat[0].id, b.states.at(-1)!.chat[1].id);
     const invalid = await connect("cccccccccccccccccccccccc", "wrong");
     await until(() => invalid.errors.length > 0);
     assert.equal(invalid.states.length, 0);
@@ -307,4 +311,98 @@ test("一人断线重连时保留连续播放的时钟，不拉另一人回退",
   assert.equal(room.position, 12000);
   assert.equal(room.playing, true);
   assert.equal(room.elapsedMs, 2000);
+});
+
+test("封面和专辑穿过共享校验，拒绝本地、脚本和带凭据的图片地址", () => {
+  const result = cleanTracks([
+    {
+      ...tracks[0],
+      cover: "https://y.gtimg.cn/cover.jpg",
+      album: {
+        id: "album",
+        name: "专辑",
+        cover: "https://y.gtimg.cn/album.jpg",
+        privatePath: "/private",
+      },
+      fee: 1,
+    },
+  ])[0];
+  assert.equal(result.cover, "https://y.gtimg.cn/cover.jpg");
+  assert.deepEqual(result.album, {
+    id: "album",
+    name: "专辑",
+    cover: "https://y.gtimg.cn/album.jpg",
+  });
+  for (const cover of [
+    "file:///private",
+    "cover://local",
+    "javascript:alert(1)",
+    "https://user:secret@example.com/cover.jpg",
+  ])
+    assert.equal(cleanTracks([{ ...tracks[0], cover }])[0].cover, undefined);
+});
+
+test("房间洗牌保持当前进度，双方共用随机顺序，自然下一曲不重置模式", () => {
+  let now = 0;
+  const room = new TogetherRoom(
+    () => now,
+    () => 0,
+  );
+  room.join("a", "甲");
+  room.join("b", "乙");
+  const list = ["a", "b", "c", "d"].map((id) => ({ ...tracks[0], id }));
+  room.command("a", { type: "queue", tracks: list, index: 0 });
+  now = 12000;
+  const revision = room.revision;
+  room.command("b", { type: "mode", shuffleMode: "on" });
+  assert.equal(room.revision, revision);
+  assert.equal(room.position, 12000);
+  assert.deepEqual(
+    room.tracks.map((t) => t.id),
+    ["a", "c", "d", "b"],
+  );
+  assert.equal(room.snapshot().shuffleMode, "on");
+  now = 100000;
+  assert.equal(room.tick(), true);
+  assert.equal(room.tracks[room.index].id, "c");
+  assert.equal(room.snapshot().shuffleMode, "on");
+  room.command("a", { type: "mode", shuffleMode: "off" });
+  assert.deepEqual(
+    room.tracks.map((t) => t.id),
+    ["a", "b", "c", "d"],
+  );
+  assert.equal(room.index, 2);
+  assert.equal(room.position, 0);
+});
+
+test("随机模式保留新增与删除，关闭随机恢复原顺序且不复活删除曲目", () => {
+  const { room } = setup();
+  room.command("a", { type: "mode", shuffleMode: "on" });
+  room.command("b", { type: "enqueue", position: "end", tracks: [{ ...tracks[0], id: "three" }] });
+  room.command("b", { type: "remove", track: tracks[1] });
+  room.command("a", { type: "mode", shuffleMode: "off" });
+  assert.deepEqual(
+    room.tracks.map((t) => t.id),
+    ["one", "three"],
+  );
+  room.command("b", { type: "mode", shuffleMode: "on" });
+  room.command("a", {
+    type: "queue",
+    tracks: [tracks[0], tracks[1], { ...tracks[0], id: "four" }],
+    index: 1,
+  });
+  assert.equal(room.snapshot().shuffleMode, "on");
+  assert.equal(room.tracks[room.index].id, "two");
+});
+
+test("单曲循环由房间在自然结束时重播，手动切歌仍可前进", () => {
+  const { room, advance } = setup();
+  room.command("a", { type: "mode", repeatMode: "one" });
+  advance(100000);
+  assert.equal(room.tick(), true);
+  assert.equal(room.index, 0);
+  assert.equal(room.position, 0);
+  room.command("b", { type: "next" });
+  assert.equal(room.index, 1);
+  assert.equal(room.snapshot().repeatMode, "one");
 });

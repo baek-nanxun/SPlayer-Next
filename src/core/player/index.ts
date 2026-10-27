@@ -1157,6 +1157,7 @@ const syncPlayMode = (): void => {
  * @param mode - list（列表循环）、one（单曲循环）
  */
 export const setRepeatMode = (mode: RepeatMode): void => {
+  if (routeTogether({ type: "mode", repeatMode: mode })) return;
   const status = useStatusStore();
   if (status.repeatMode === mode) return;
   status.repeatMode = mode;
@@ -1183,6 +1184,7 @@ export const toggleShuffleMode = (): void => {
  * @param mode - off（顺序）、on（随机）
  */
 export const setShuffleMode = (mode: ShuffleMode): void => {
+  if (routeTogether({ type: "mode", shuffleMode: mode })) return;
   const status = useStatusStore();
   // 心动模式下忽略
   if (status.heartMode) return;
@@ -1571,13 +1573,40 @@ export const disposePlayer = (): void => {
  * @param snapshot - 房间完整队列快照
  */
 export const applyTogetherQueue = (snapshot: TogetherSnapshot): void => {
+  const status = useStatusStore();
+  status.shuffleMode = snapshot.shuffleMode ?? "off";
+  status.repeatMode = snapshot.repeatMode ?? "list";
+  syncPlayMode();
   if (!snapshot.tracks.length && snapshot.queueRevision === 0) return;
   const old = queue.queue.value;
   if (
     old.length !== snapshot.tracks.length ||
-    old.some((t, i) => t.id !== snapshot.tracks[i]?.id || t.source !== snapshot.tracks[i]?.source)
+    old.some(
+      (t, i) =>
+        t.id !== snapshot.tracks[i]?.id ||
+        t.source !== snapshot.tracks[i]?.source ||
+        t.cover !== snapshot.tracks[i]?.cover ||
+        t.album?.id !== snapshot.tracks[i]?.album?.id ||
+        t.album?.name !== snapshot.tracks[i]?.album?.name ||
+        t.album?.cover !== snapshot.tracks[i]?.album?.cover,
+    )
   )
     queue.setQueue(snapshot.tracks);
+  const media = useMediaStore();
+  const current = media.track;
+  const target = snapshot.tracks[snapshot.index];
+  if (
+    current &&
+    target &&
+    current.id === target.id &&
+    current.source === target.source &&
+    ((!current.cover && target.cover) || (!current.album && target.album))
+  )
+    media.setTrack({
+      ...current,
+      cover: current.cover ?? target.cover,
+      album: current.album ?? target.album,
+    });
   useStatusStore().playIndex = snapshot.tracks.length ? snapshot.index : -1;
 };
 
@@ -1604,8 +1633,6 @@ export const applyTogetherSnapshot = async (
   }
   status.fmMode = false;
   status.heartMode = false;
-  status.shuffleMode = "off";
-  status.repeatMode = "list";
   if (status.speed !== 1) {
     await window.api.player.setSpeed(1);
     status.speed = 1;

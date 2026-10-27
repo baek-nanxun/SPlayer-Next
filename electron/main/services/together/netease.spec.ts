@@ -278,3 +278,87 @@ it("官方查询中断时冻结本机计时，不发送暂停给另一端", asyn
   expect(frames.at(-1)!.snapshot!.elapsedMs).toBe(elapsed);
   expect(api.mock.calls.some(([name]) => name === "listentogether_play_command")).toBe(false);
 });
+
+it("新建的空房间暂停不报QQ曲目错误，直接选择网易云歌曲可开始同步", async () => {
+  const { client, state, frames, api } = setup();
+  state.ids = [];
+  state.command.targetSongId = "";
+  state.command.playStatus = "PAUSE";
+  await client.start(invite);
+  await client.send({ type: "command", command: { type: "pause" } });
+  expect(api.mock.calls.some(([name]) => name === "listentogether_play_command")).toBe(false);
+  await expect(client.send({ type: "command", command: { type: "play" } })).rejects.toThrow(
+    "还没有歌曲",
+  );
+  await client.send({
+    type: "command",
+    command: {
+      type: "playTrack",
+      track: {
+        id: "33",
+        source: "netease",
+        title: "选择的歌",
+        artists: [],
+        duration: 300000,
+      },
+    },
+  });
+  expect(frames.at(-1)!.snapshot!.tracks.map((t) => t.id)).toEqual(["33"]);
+  expect(frames.at(-1)!.snapshot!.playing).toBe(true);
+});
+
+it("只读轮询遇到一次超时会恢复，控制写入超时不自动重复", async () => {
+  const { client, api, frames } = setup();
+  await client.start(invite);
+  const implementation = api.getMockImplementation()!;
+  let failRead = true;
+  api.mockImplementation(async (name, params) => {
+    if (name === "listentogether_sync_playlist_get" && failRead) {
+      failRead = false;
+      throw new Error("netease 502: timeout");
+    }
+    if (name === "listentogether_play_command") throw new Error("netease 502: timeout");
+    return implementation(name, params);
+  });
+  await vi.advanceTimersByTimeAsync(2100);
+  expect(frames.at(-1)!.connection).toBe("connected");
+  await expect(client.send({ type: "command", command: { type: "pause" } })).rejects.toThrow(
+    "timeout",
+  );
+  expect(api.mock.calls.filter(([name]) => name === "listentogether_play_command")).toHaveLength(1);
+});
+
+it("两份SPlayer共用官方房间时，任一端点歌、暂停与继续都会传给另一端", async () => {
+  const { client, api, state, frames } = setup();
+  const peerFrames: TogetherStatus[] = [];
+  const peer = new NeteaseTogether(api, (frame) => peerFrames.push(frame));
+  instances.push(peer);
+  state.inRoom = false;
+  state.ids = [];
+  state.command.targetSongId = "";
+  state.command.playStatus = "PAUSE";
+  await client.start();
+  await peer.start(invite);
+  await client.send({
+    type: "command",
+    command: {
+      type: "playTrack",
+      track: {
+        id: "33",
+        source: "netease",
+        title: "网易云单曲",
+        duration: 300000,
+        artists: [],
+      },
+    },
+  });
+  await vi.advanceTimersByTimeAsync(2100);
+  expect(peerFrames.at(-1)!.snapshot).toMatchObject({ playing: true, tracks: [{ id: "33" }] });
+  await peer.send({ type: "command", command: { type: "pause" } });
+  await vi.advanceTimersByTimeAsync(2100);
+  expect(frames.at(-1)!.snapshot!.playing).toBe(false);
+  await client.send({ type: "command", command: { type: "play" } });
+  await vi.advanceTimersByTimeAsync(2100);
+  expect(peerFrames.at(-1)!.snapshot!.playing).toBe(true);
+  expect(api.mock.calls.filter(([name]) => name === "listentogether_play_command")).toHaveLength(3);
+});

@@ -10,7 +10,7 @@ const hosts = new Set([
   "clientlog.music.163.com",
   "clientlog3.music.163.com",
 ]);
-const agent = new Agent({
+const agentOptions = {
   connections: 2,
   maxOrigins: hosts.size,
   connect(options, callback) {
@@ -42,12 +42,19 @@ const agent = new Agent({
     socket.once("error", finish);
     return socket;
   },
-});
+} satisfies ConstructorParameters<typeof Agent>[0];
+const agent = new Agent(agentOptions);
+// 房间控制不与搜索、歌词等请求争用两个连接，慢网时仍保持有界
+const togetherAgent = new Agent(agentOptions);
 
 /** 仅对原安装中指定的网易云域名使用直连修复。 */
-export const fetchNeteaseDirect = (url: string | URL, init?: RequestInit): Promise<Response> => {
+export const fetchNeteaseDirect = (
+  url: string | URL,
+  init?: RequestInit,
+  together = false,
+): Promise<Response> => {
   if (!hosts.has(new URL(url).hostname)) return fetchWithProxy(url, init);
-  return undiciFetch(url, { ...init, dispatcher: agent } as Parameters<
+  return undiciFetch(url, { ...init, dispatcher: together ? togetherAgent : agent } as Parameters<
     typeof undiciFetch
   >[1]) as unknown as Promise<Response>;
 };

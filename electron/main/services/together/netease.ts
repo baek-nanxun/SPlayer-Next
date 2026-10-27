@@ -156,6 +156,27 @@ export class NeteaseTogether {
     return next;
   }
 
+  /** 只读查询遇到临时网络错误时重试一次，写入操作绝不自动重放
+   * @param name - 状态、队列或歌曲详情查询
+   * @param params - 查询参数
+   */
+  private async read(
+    name: string,
+    params?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    try {
+      return await this.api(name, params);
+    } catch (error) {
+      if (
+        this.stopped ||
+        !(error instanceof Error) ||
+        !/502|timeout|timed out|aborted|fetch failed|EAI_AGAIN|ECONNRESET/i.test(error.message)
+      )
+        throw error;
+      return this.api(name, params);
+    }
+  }
+
   /** 完成本轮请求后再调度，慢网时不会堆积轮询 */
   private schedule(): void {
     if (this.stopped) return;
@@ -165,7 +186,11 @@ export class NeteaseTogether {
           if (!this.stopped)
             this.state(
               "reconnecting",
-              error instanceof Error ? error.message : "网易云房间连接中断",
+              error instanceof Error && /502|timeout|timed out|aborted/i.test(error.message)
+                ? "网易云房间同步暂时超时，正在自动重试；当前歌曲继续播放"
+                : error instanceof Error
+                  ? error.message
+                  : "网易云房间连接中断",
             );
         })
         .finally(() => this.schedule());
@@ -176,7 +201,7 @@ export class NeteaseTogether {
   private async refresh(): Promise<void> {
     if (!this.room || this.stopped) return;
     if (Date.now() - this.statusAt > 10000) {
-      const data = (await this.api("listentogether_status")).data as {
+      const data = (await this.read("listentogether_status")).data as {
         inRoom?: boolean;
         roomInfo?: RoomInfo;
       };
@@ -189,7 +214,7 @@ export class NeteaseTogether {
       this.room = data.roomInfo;
       this.statusAt = Date.now();
     }
-    const data = (await this.api("listentogether_sync_playlist_get", { roomId: this.room.roomId }))
+    const data = (await this.read("listentogether_sync_playlist_get", { roomId: this.room.roomId }))
       .data as PlaylistData;
     const command = data?.playCommand;
     const ids = (data?.playlist?.displayList?.result ?? []).map(String);
@@ -203,7 +228,7 @@ export class NeteaseTogether {
       const existing = new Map(this.tracks.map((t) => [t.id, t]));
       const missing = ids.filter((id) => !existing.has(id));
       for (let i = 0; i < missing.length; i += 500) {
-        const result = await this.api("song_detail", { ids: missing.slice(i, i + 500).join(",") });
+        const result = await this.read("song_detail", { ids: missing.slice(i, i + 500).join(",") });
         for (const song of (result.songs ?? []) as NeteaseSong[]) {
           const album = song.al ?? song.album;
           const cover = album?.picUrl ? `${album.picUrl}?param=300y300` : undefined;
@@ -428,13 +453,18 @@ export class NeteaseTogether {
       }
       case "clear":
         throw new Error("官方一起听暂不支持清空列表，可以播放另一个歌单");
+      case "mode":
+        throw new Error("官方房间暂不支持同步播放模式，请使用自建房间");
     }
-    if (
-      !tracks.length ||
-      tracks.length > 2000 ||
-      tracks.some((t) => t.source !== "netease" || !/^[1-9]\d{0,19}$/.test(t.id))
-    )
-      throw new Error("官方一起听仅支持 1–2000 首网易云歌曲，QQ 歌曲请使用自建房间");
+    if (!tracks.length) {
+      if (command.type === "pause") return;
+      throw new Error("官方房间还没有歌曲，请先播放一个网易云歌单或选择歌曲");
+    }
+    if (tracks.length > 2000) throw new Error("网易云官方一起听最多支持 2000 首歌曲");
+    if (tracks.some((t) => t.source !== "netease"))
+      throw new Error("网易云官方房间仅支持网易云歌曲，跨平台歌曲请使用自建房间");
+    const invalid = tracks.find((t) => !/^[1-9]\d{0,19}$/.test(t.id));
+    if (invalid) throw new Error(`歌曲「${invalid.title}」的网易云编号无效，请重新加载原歌单`);
     if (!target || !tracks.some((t) => t.id === target)) throw new Error("官方歌曲索引无效");
     if (
       !Number.isFinite(position) ||

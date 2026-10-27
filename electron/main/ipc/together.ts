@@ -107,6 +107,8 @@ export const registerTogetherIpc = (): void => {
               v.chat.length > 50 ||
               typeof v.playing !== "boolean" ||
               typeof v.counting !== "boolean" ||
+              (v.shuffleMode !== undefined && !["off", "on"].includes(v.shuffleMode)) ||
+              (v.repeatMode !== undefined && !["list", "one"].includes(v.repeatMode)) ||
               typeof v.desiredPlaying !== "boolean"
             )
               throw new Error("房间快照无效");
@@ -121,6 +123,8 @@ export const registerTogetherIpc = (): void => {
             msg.state = {
               revision: v.revision,
               queueRevision: Number.isSafeInteger(v.queueRevision) ? v.queueRevision : v.revision,
+              shuffleMode: v.shuffleMode ?? "off",
+              repeatMode: v.repeatMode ?? "list",
               serverTime: v.serverTime,
               position: v.position,
               elapsedMs: v.elapsedMs,

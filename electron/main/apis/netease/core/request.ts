@@ -287,16 +287,21 @@ export const createRequest = async (
 
   let res: Response | null = null;
   let lastErr: unknown = null;
+  const together = uri.startsWith("/api/listen/together/");
   const maxAttempts = options.retry === false ? 1 : 3;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      res = await fetchNeteaseDirect(url, {
-        method: "POST",
-        headers,
-        body,
-        signal: AbortSignal.timeout(8000),
-      });
+      res = await fetchNeteaseDirect(
+        url,
+        {
+          method: "POST",
+          headers,
+          body,
+          signal: AbortSignal.timeout(together ? 15000 : 8000),
+        },
+        together,
+      );
       break;
     } catch (err) {
       lastErr = err;

@@ -11,6 +11,11 @@ const mocks = vi.hoisted(() => ({
   host: vi.fn(),
   join: vi.fn(),
   status: vi.fn(),
+  localTracks: [] as import("@shared/types/player").Track[],
+  localStatus: {
+    state: "paused",
+    currentTrack: null as import("@shared/types/player").Track | null,
+  },
 }));
 vi.mock("@/core/player", () => ({
   applyTogetherQueue: mocks.queue,
@@ -22,7 +27,14 @@ vi.mock("./account", () => ({
     profile: { nickname: "听友", avatarUrl: "https://example.com/avatar.jpg" },
   }),
 }));
-vi.mock("./status", () => ({ useStatusStore: () => ({ state: "paused" }) }));
+vi.mock("./status", () => ({ useStatusStore: () => mocks.localStatus }));
+vi.mock("./queue", () => ({
+  queue: {
+    get value() {
+      return mocks.localTracks;
+    },
+  },
+}));
 vi.mock("@/composables/useToast", () => ({ toast: { warning: vi.fn(), error: vi.fn() } }));
 import { useTogetherStore } from "./together";
 let pinia: ReturnType<typeof createPinia>;
@@ -53,6 +65,8 @@ const state = (queueRevision: number, count: number): TogetherStatus => ({
 });
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.localTracks = [];
+  mocks.localStatus.currentTrack = null;
   mocks.apply.mockReset().mockResolvedValue(undefined);
   mocks.status.mockResolvedValue({ success: true, data: { position: 10000, state: "playing" } });
   pinia = createPinia();
@@ -214,4 +228,76 @@ it("持续缓冲时保留恢复间隔，避免每个心跳反复拖动本机", a
   await flushPromises();
   expect(mocks.apply).toHaveBeenCalledTimes(2);
   expect(mocks.send.mock.calls.some(([m]) => m.type === "command")).toBe(false);
+});
+
+it("共享歌曲保留安全封面、专辑与版权信息，仍剔除本地路径", async () => {
+  const room = useTogetherStore();
+  await flushPromises();
+  mocks.receive!(state(1, 2));
+  await flushPromises();
+  mocks.send.mockClear();
+  room.command({
+    type: "playTrack",
+    track: {
+      ...track,
+      cover: "https://y.gtimg.cn/cover.jpg",
+      album: {
+        id: "album",
+        name: "专辑",
+        cover: "https://y.gtimg.cn/album.jpg",
+        serverId: "private-server",
+      },
+      fee: 1,
+    },
+  });
+  expect(mocks.send.mock.calls[0][0].command.track).toMatchObject({
+    cover: "https://y.gtimg.cn/cover.jpg",
+    album: { id: "album", name: "专辑" },
+    fee: 1,
+  });
+  expect(mocks.send.mock.calls[0][0].command.track.album).not.toHaveProperty("serverId");
+  mocks.send.mockClear();
+  room.command({ type: "playTrack", track: { ...track, cover: "file:///private/cover" } });
+  expect(mocks.send.mock.calls[0][0].command.track).not.toHaveProperty("cover");
+});
+
+it("新建网易云官方空房间时点击当前歌曲，先共享完整网易云列表", async () => {
+  const room = useTogetherStore();
+  await flushPromises();
+  const empty = state(0, 0);
+  empty.mode = "netease";
+  mocks.localTracks = ["11", "22"].map((id) => ({ ...track, id, source: "netease" }));
+  mocks.localStatus.currentTrack = mocks.localTracks[1];
+  mocks.receive!(empty);
+  await flushPromises();
+  mocks.send.mockClear();
+  room.command({ type: "play" });
+  expect(mocks.send).toHaveBeenCalledExactlyOnceWith({
+    type: "command",
+    command: {
+      type: "queue",
+      tracks: mocks.localTracks,
+      index: 1,
+    },
+  });
+});
+
+it("官方轮询暂时超时保留本机播放，恢复后不重新加载相同版本", async () => {
+  const room = useTogetherStore();
+  await flushPromises();
+  const active = state(1, 2);
+  active.mode = "netease";
+  mocks.receive!(active);
+  await flushPromises();
+  mocks.apply.mockClear();
+  mocks.invalidate.mockClear();
+  const pause = vi.spyOn(window.api.player, "pause");
+  mocks.receive!({ ...active, connection: "reconnecting", error: "同步超时" });
+  expect(room.state.error).toBe("同步超时");
+  expect(pause).not.toHaveBeenCalled();
+  expect(mocks.invalidate).not.toHaveBeenCalled();
+  mocks.receive!(active);
+  await flushPromises();
+  expect(mocks.apply).not.toHaveBeenCalled();
+  expect(mocks.send).toHaveBeenCalledWith({ type: "ready", revision: active.snapshot!.revision });
 });

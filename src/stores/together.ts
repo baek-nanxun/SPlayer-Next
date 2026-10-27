@@ -1,5 +1,6 @@
 import { useAccountStore } from "./account";
 import { useStatusStore } from "./status";
+import { queue as playerQueue } from "./queue";
 import { setTogetherControl } from "@/services/togetherBridge";
 import {
   applyTogetherQueue,
@@ -55,6 +56,23 @@ export const useTogetherStore = defineStore("together", () => {
       toast.warning("房间连接中，请稍候");
       return;
     }
+    if (command.type === "mode" && ["netease", "qqmusic"].includes(state.value.mode ?? "")) {
+      toast.warning("官方房间暂不支持同步播放模式，请使用自建房间的随机或单曲循环");
+      return;
+    }
+    // 新建官方房间为空时，点击当前歌曲会走播放开关，必须先同步本机列表
+    if (command.type === "play" && !state.value.snapshot?.tracks.length) {
+      const status = useStatusStore();
+      const tracks = [...playerQueue.value];
+      const index = tracks.findIndex(
+        (t) => t.id === status.currentTrack?.id && t.source === status.currentTrack?.source,
+      );
+      if (!tracks.length || index < 0) {
+        toast.warning("请先选择一个在线歌单或歌曲，开始一起听");
+        return;
+      }
+      command = { type: "queue", tracks, index };
+    }
     const tracks =
       command.type === "queue" || command.type === "enqueue"
         ? command.tracks
@@ -80,15 +98,29 @@ export const useTogetherStore = defineStore("together", () => {
     /** 只发送必要歌曲资料，完整歌单也不包含本地路径或大封面
      * @param track - 本地歌曲资料
      */
-    const compact = (track: TogetherTrack): TogetherTrack => ({
-      id: track.id,
-      source: track.source,
-      title: track.title,
-      artists: track.artists.map((a) => ({ name: a.name })),
-      duration: track.duration,
-      extId: track.extId,
-      mediaId: track.mediaId,
-    });
+    const compact = (track: TogetherTrack): TogetherTrack => {
+      const images = [track.cover, track.album?.cover].map((value) => {
+        if (!value || value.length > 2048 || !URL.canParse(value)) return undefined;
+        const url = new URL(value);
+        return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password
+          ? url.href
+          : undefined;
+      });
+      return {
+        id: track.id,
+        source: track.source,
+        title: track.title,
+        artists: track.artists.map((a) => ({ name: a.name })),
+        duration: track.duration,
+        extId: track.extId,
+        mediaId: track.mediaId,
+        cover: images[0] ?? images[1],
+        album: track.album
+          ? { id: track.album.id, name: track.album.name, cover: images[1] }
+          : undefined,
+        fee: track.fee,
+      };
+    };
     const outgoing =
       command.type === "queue" || command.type === "enqueue"
         ? { ...command, tracks: tracks.map(compact) }
@@ -200,12 +232,23 @@ export const useTogetherStore = defineStore("together", () => {
     if (
       latest.snapshot &&
       (latest.snapshot.queueRevision !== old.snapshot?.queueRevision ||
-        latest.snapshot.index !== old.snapshot?.index)
+        latest.snapshot.index !== old.snapshot?.index ||
+        latest.snapshot.shuffleMode !== old.snapshot?.shuffleMode ||
+        latest.snapshot.repeatMode !== old.snapshot?.repeatMode)
     )
       applyTogetherQueue(latest.snapshot);
     receivedAt = Date.now();
     now.value = receivedAt;
     setTogetherControl(latest.connection === "idle" ? null : command);
+    if (
+      latest.connection === "reconnecting" &&
+      (latest.mode === "netease" || latest.mode === "qqmusic") &&
+      latest.snapshot
+    ) {
+      localReady = null;
+      driftAt = 0;
+      return;
+    }
     if (latest.connection !== "connected") {
       generation++;
       pending = null;

@@ -34,6 +34,21 @@ describe("平台请求协议与解析", () => {
     expect(api.fetch).toHaveBeenCalledOnce();
   });
 
+  it("官方房间使用独立连接池与十五秒超时，普通请求保持八秒", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    await createRequest(
+      "/api/listen/together/sync/playlist/get",
+      { roomId: "test-room" },
+      { retry: false },
+    );
+    expect(timeout).toHaveBeenLastCalledWith(15000);
+    expect(api.fetch.mock.calls[0][2]).toBe(true);
+    api.fetch.mockResolvedValueOnce(new Response('{"code":200}'));
+    await createRequest("/api/song/detail", {}, {});
+    expect(timeout).toHaveBeenLastCalledWith(8000);
+    expect(api.fetch.mock.calls[1][2]).toBe(false);
+  });
+
   it("原收藏请求不获取反作弊凭据", async () => {
     await createRequest("/api/playlist/subscribe", { id: 1 }, { crypto: "eapi" });
     expect(api.v3).not.toHaveBeenCalled();
