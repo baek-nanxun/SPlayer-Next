@@ -73,12 +73,16 @@ export const installPlayStats = (): void => {
   const media = useMediaStore();
   const status = useStatusStore();
 
-  // 曲目身份变化:结算旧会话,为新曲开会话
+  // 元数据晚到时更新当前会话，切歌才结算，避免保存缺封面的旧快照
   watch(
-    () => (media.track ? trackKey(media.track) : null),
-    () => {
+    () => media.track,
+    (track) => {
+      if (session && track && trackKey(session.track) === trackKey(track)) {
+        session.track = track;
+        return;
+      }
       finalize();
-      if (media.track) begin(media.track, status.state === "playing");
+      if (track) begin(track, status.state === "playing");
     },
   );
 

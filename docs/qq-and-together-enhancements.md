@@ -44,6 +44,12 @@ QQ 音乐可以从主账号入口通过 QQ 或微信扫码登录，与网易云�
 
 源码与构建方式沿用上游 README 和 package.json。账号 Cookie、用户数据库、私人房间邀请、测试配置与本地备份不属于仓库内容。QQ 协议字段参考 qmtui，对应 MIT 许可保留于 THIRD_PARTY_NOTICES/qmtui-LICENSE.txt。
 
+## 1.2.3 首页历史封面修复
+
+首页「反复聆听」使用最新播放快照，并从同平台、同歌曲 ID 的历史记录补齐缺失的封面和专辑。早期一起听保存的简化快照不再遮掉已经存在的封面；播放次数、时长和时间均不改写。播放过程中晚到的封面元数据也会保存到当前统计会话，不会多记一次播放。没有任何历史封面数据的歌曲仍显示占位图。
+
+这与上游 [Issue #306](https://github.com/SPlayer-Dev/SPlayer-Next/issues/306) 的本地 FLAC 内嵌封面 MIME 字段问题不同，不需要修改音乐文件。
+
 ## 自动构建与发布
 
 固定下载入口：[增强版 Releases](https://github.com/baek-nanxun/SPlayer-Next/releases)，构建进度见 [Actions](https://github.com/baek-nanxun/SPlayer-Next/actions)。

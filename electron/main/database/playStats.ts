@@ -158,12 +158,21 @@ export const getStatsSummary = (): PlayStatsSummary => {
   }
 };
 
-/** 取最常播放的曲目（含播放次数），按次数倒序；读盘失败返回空 */
+/**
+ * 取最常播放的曲目，使用最新记录并从同源历史补齐封面与专辑
+ * @param limit - 返回曲目数上限
+ * @returns 按播放次数、最近播放时间倒序的曲目
+ */
 export const getTopTracks = (limit: number): TopTrack[] => {
   try {
-    const rows = getDb()
+    const db = getDb();
+    const rows = db
       .prepare(
-        `SELECT track_json, COUNT(*) AS plays
+        `SELECT (
+           SELECT recent.track_json FROM play_history recent
+           WHERE recent.source = play_history.source AND recent.track_id = play_history.track_id
+           ORDER BY recent.started_at DESC, recent.id DESC LIMIT 1
+         ) AS track_json, COUNT(*) AS plays
          FROM play_history
          WHERE source != 'streaming'
          GROUP BY source, track_id
@@ -171,10 +180,34 @@ export const getTopTracks = (limit: number): TopTrack[] => {
          LIMIT ?`,
       )
       .all(limit) as { track_json: string; plays: number }[];
-    return rows.map((row) => ({
-      track: JSON.parse(row.track_json) as Track,
-      playCount: row.plays,
-    }));
+    // 早期一起听记录只保存歌曲身份；展示时补齐，避免改写听歌次数和时间
+    const metadata = db.prepare(`SELECT
+      (SELECT json_extract(track_json, '$.cover') FROM play_history
+       WHERE source = :source AND track_id = :trackId
+         AND NULLIF(TRIM(json_extract(track_json, '$.cover')), '') IS NOT NULL
+       ORDER BY started_at DESC, id DESC LIMIT 1) AS cover,
+      (SELECT json_extract(track_json, '$.coverOriginal') FROM play_history
+       WHERE source = :source AND track_id = :trackId
+         AND NULLIF(TRIM(json_extract(track_json, '$.coverOriginal')), '') IS NOT NULL
+       ORDER BY started_at DESC, id DESC LIMIT 1) AS coverOriginal,
+      (SELECT json_extract(track_json, '$.album') FROM play_history
+       WHERE source = :source AND track_id = :trackId
+         AND NULLIF(TRIM(json_extract(track_json, '$.album.name')), '') IS NOT NULL
+       ORDER BY started_at DESC, id DESC LIMIT 1) AS album`);
+    return rows.map((row) => {
+      const track = JSON.parse(row.track_json) as Track;
+      if (!track.cover || !track.coverOriginal || !track.album?.name) {
+        const stored = metadata.get({ source: track.source, trackId: track.id }) as {
+          cover: string | null;
+          coverOriginal: string | null;
+          album: string | null;
+        };
+        if (!track.album?.name && stored.album) track.album = JSON.parse(stored.album);
+        track.cover ||= stored.cover || track.album?.cover || undefined;
+        track.coverOriginal ||= stored.coverOriginal || undefined;
+      }
+      return { track, playCount: row.plays };
+    });
   } catch (error) {
     libraryLog.error("读取最常播放失败:", error);
     return [];
