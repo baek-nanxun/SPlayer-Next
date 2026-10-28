@@ -99,6 +99,7 @@ jobs:
       - run: rm -f .npmrc
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm prettier --check . && pnpm lint && pnpm typecheck && pnpm test
+      - run: node --test .github/scripts/gen-nightly-version.test.cjs
 
   # 平台独立构建
   build:
