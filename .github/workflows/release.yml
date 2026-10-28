@@ -1,34 +1,110 @@
-# tag（v*）触发
-# 各架构原生 runner 构建 → 合并清单 → 创建 GitHub 草稿 Release
+# 提升 dev 版本号、推送 v* 标签或手动触发后，多平台构建并公开发布
 name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [dev]
+    paths:
+      - "package.json"
+      - ".github/workflows/release.yml"
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "要发布的标签（例如 v1.1.0-beta.1 或 v1.1.0-alpha.1）"
-        required: true
+        description: "已有版本标签，留空则发布所选分支的 package.json 版本"
+        required: false
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   NODE_VERSION: 24.x
-  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  CI: true
 
-# 同一个 tag 的发布串行执行，避免并发上传资源产生竞态
 concurrency:
-  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  group: release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
-  # 各平台/架构在对应的原生 runner 上独立构建
+  prepare:
+    name: Validate and test release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.metadata.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version }}
+      channel: ${{ steps.metadata.outputs.channel }}
+      sha: ${{ steps.metadata.outputs.sha }}
+      publish: ${{ steps.metadata.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Resolve immutable release version
+        id: metadata
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          RELEASE_TAG="v$VERSION"
+          REQUESTED_TAG="$INPUT_TAG"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then REQUESTED_TAG="$GITHUB_REF_NAME"; fi
+          if [ -n "$REQUESTED_TAG" ] && [ "$REQUESTED_TAG" != "$RELEASE_TAG" ]; then
+            echo "标签 $REQUESTED_TAG 与版本 $RELEASE_TAG 不一致" >&2
+            exit 1
+          fi
+          case "$VERSION" in
+            *-alpha|*-alpha.*) CHANNEL=alpha ;;
+            *-beta|*-beta.*) CHANNEL=beta ;;
+            *-*) echo "只支持正式版或 alpha / beta 预发布版本" >&2; exit 1 ;;
+            *) CHANNEL=latest ;;
+          esac
+          BUILD_SHA="$(git rev-parse HEAD)"
+          if git rev-parse "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            TAG_SHA="$(git rev-list -n 1 "$RELEASE_TAG")"
+            if [ "$TAG_SHA" != "$BUILD_SHA" ]; then
+              echo "版本标签已指向其他提交，请提高版本号后重试" >&2
+              exit 1
+            fi
+          fi
+          PUBLISH=true
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' > "$RUNNER_TEMP/release-draft" 2>/dev/null; then
+            if [ "$(cat "$RUNNER_TEMP/release-draft")" = "false" ]; then PUBLISH=false; fi
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "sha=$BUILD_SHA" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+      - name: Remove regional mirrors
+        run: rm -f .npmrc
+      - name: Install check dependencies
+        if: steps.metadata.outputs.publish == 'true'
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Format, lint, types and tests
+        if: steps.metadata.outputs.publish == 'true'
+        run: |
+          pnpm prettier --check .
+          pnpm lint
+          pnpm typecheck
+          pnpm test
+
   build:
     name: Build on ${{ matrix.name }}
+    needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
+    timeout-minutes: 90
+    env:
+      UPDATE_CHANNEL: ${{ needs.prepare.outputs.channel }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -56,7 +132,7 @@ jobs:
       - name: Check out git repository
         uses: actions/checkout@v5
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.prepare.outputs.sha }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -74,31 +150,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-
-      # 校验标签、版本和更新通道
-      - name: Verify release metadata
-        shell: bash
-        run: |
-          VERSION="$(node -p "require('./package.json').version")"
-          if [ "v$VERSION" != "$RELEASE_TAG" ]; then
-            echo "标签 $RELEASE_TAG 与 package.json 版本 v$VERSION 不一致"
-            exit 1
-          fi
-          case "$VERSION" in
-            *-alpha|*-alpha.*)
-              echo "UPDATE_CHANNEL=alpha" >> "$GITHUB_ENV"
-              ;;
-            *-beta|*-beta.*)
-              echo "UPDATE_CHANNEL=beta" >> "$GITHUB_ENV"
-              ;;
-            *-*)
-              echo "不支持的预发布版本格式: $VERSION"
-              exit 1
-              ;;
-            *)
-              echo "UPDATE_CHANNEL=latest" >> "$GITHUB_ENV"
-              ;;
-          esac
 
       # Linux: 安装系统构建/打包依赖
       - name: 安装系统依赖 (Linux)
@@ -127,7 +178,6 @@ jobs:
       - name: Build ${{ matrix.name }}
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: |
           case "${{ matrix.target }}" in
@@ -160,57 +210,33 @@ jobs:
         with:
           name: SPlayer-Next-${{ matrix.name }}
           path: dist/*.*
+          if-no-files-found: error
+          retention-days: 7
 
-  # 合并多架构更新清单并创建 GitHub 草稿 Release
+  # 全部构建成功后再发布完整更新清单与安装包
   release:
-    name: Create GitHub Release
-    needs: build
+    name: Publish GitHub Release
+    needs: [prepare, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
+    env:
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      APP_VERSION: ${{ needs.prepare.outputs.version }}
+      UPDATE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      BUILD_SHA: ${{ needs.prepare.outputs.sha }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
-          ref: ${{ env.RELEASE_TAG }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-
-      - name: Verify release metadata
-        shell: bash
-        run: |
-          VERSION="$(node -p "require('./package.json').version")"
-          if [ "v$VERSION" != "$RELEASE_TAG" ]; then
-            echo "标签 $RELEASE_TAG 与 package.json 版本 v$VERSION 不一致"
-            exit 1
-          fi
-          case "$VERSION" in
-            *-alpha|*-alpha.*)
-              echo "UPDATE_CHANNEL=alpha" >> "$GITHUB_ENV"
-              ;;
-            *-beta|*-beta.*)
-              echo "UPDATE_CHANNEL=beta" >> "$GITHUB_ENV"
-              ;;
-            *-*)
-              echo "不支持的预发布版本格式: $VERSION"
-              exit 1
-              ;;
-            *)
-              echo "UPDATE_CHANNEL=latest" >> "$GITHUB_ENV"
-              ;;
-          esac
-          echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
-
-      # 整理待发布资源
-      - name: Prepare release assets
+      - name: Prepare and verify release assets
         shell: bash
         run: |
           npm install --no-save --prefix "$RUNNER_TEMP/jsyaml" js-yaml@4.1.0
@@ -218,34 +244,31 @@ jobs:
             node --test .github/scripts/prepare-release-assets.test.cjs
           NODE_PATH="$RUNNER_TEMP/jsyaml/node_modules" \
             node .github/scripts/prepare-release-assets.cjs artifacts release-assets "$APP_VERSION"
-          echo "待发布资源："
-          ls -1 release-assets
-
-      # 用官方 gh CLI 确定性创建 Release
-      # 正式版保持草稿，预览版直接发布为 prerelease
-      - name: Create GitHub Release
+          cd release-assets
+          sha256sum -- * > ../SHA256SUMS.txt
+          mv ../SHA256SUMS.txt .
+      # 先在草稿内上传全部资源，成功后公开；重跑不删除已公开版本
+      - name: Publish complete release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          # 重跑场景：若同名 release 已存在则先删除，避免脏状态（保留 tag）
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release delete "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --yes
-          fi
-          if [ "$UPDATE_CHANNEL" != "latest" ]; then
-            gh release create "$RELEASE_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "$RELEASE_TAG" \
-              --generate-notes \
-              --verify-tag \
-              --prerelease \
-              release-assets/*
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' > "$RUNNER_TEMP/release-draft" 2>/dev/null; then
+            if [ "$(cat "$RUNNER_TEMP/release-draft")" = "false" ]; then
+              echo "该版本已公开发布，请提高版本号，不覆盖现有安装包" >&2
+              exit 1
+            fi
           else
             gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "$RELEASE_TAG" \
-              --generate-notes \
-              --verify-tag \
-              --draft \
-              release-assets/*
+              --target "$BUILD_SHA" \
+              --title "SPlayer 增强版 $RELEASE_TAG" \
+              --generate-notes --draft
           fi
+          gh release upload "$RELEASE_TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
+          if [ "$UPDATE_CHANNEL" = "latest" ]; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
+          else
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false
+          fi
+          echo "下载地址：https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"

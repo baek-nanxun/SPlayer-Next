@@ -194,7 +194,7 @@ const config: Configuration = {
   },
   publish: {
     provider: "github",
-    owner: "SPlayer-Dev",
+    owner: "baek-nanxun",
     repo: "SPlayer-Next",
     channel: updateChannel,
   },

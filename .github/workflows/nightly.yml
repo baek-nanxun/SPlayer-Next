@@ -2,6 +2,19 @@
 name: Nightly Build
 
 on:
+  push:
+    branches: [dev]
+    paths:
+      - "src/**"
+      - "electron/**"
+      - "native/**"
+      - "shared/**"
+      - "scripts/**"
+      - "public/**"
+      - "resources/**"
+      - "pnpm-lock.yaml"
+      - "electron*.config.ts"
+      - ".github/workflows/nightly.yml"
   schedule:
     # 每天 UTC 18:00 触发
     - cron: "0 18 * * *"
@@ -30,7 +43,8 @@ jobs:
       - name: Check out dev branch
         uses: actions/checkout@v5
         with:
-          ref: dev
+          ref: ${{ github.event_name == 'push' && github.sha || 'dev' }}
+          fetch-depth: 0
 
       - name: Compare commit with latest nightly release
         id: check
@@ -45,7 +59,13 @@ jobs:
           echo "上次 Nightly Tag Commit: $REMOTE_TAG_SHA"
           echo "prev_sha=$REMOTE_TAG_SHA" >> "$GITHUB_OUTPUT"
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && ! git diff --quiet HEAD^ HEAD -- package.json; then
+            echo "版本号变更由 Release 工作流处理，跳过重复 Nightly 构建"
+            echo "has_new_commits=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             echo "手动触发构建，直接继续执行"
             echo "has_new_commits=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -59,12 +79,36 @@ jobs:
             echo "has_new_commits=true" >> "$GITHUB_OUTPUT"
           fi
 
+  check:
+    name: Check nightly source
+    needs: check-commits
+    if: needs.check-commits.outputs.has_new_commits == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.check-commits.outputs.build_sha }}
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: rm -f .npmrc
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm prettier --check . && pnpm lint && pnpm typecheck && pnpm test
+
   # 平台独立构建
   build:
     name: Build on ${{ matrix.name }}
-    needs: check-commits
+    needs: [check-commits, check]
     if: needs.check-commits.outputs.has_new_commits == 'true'
+    permissions:
+      contents: read
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -143,7 +187,6 @@ jobs:
       - name: Build ${{ matrix.name }}
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPDATE_CHANNEL: nightly
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: |

@@ -30,6 +30,7 @@ env:
 
 jobs:
   build:
+    if: github.repository == 'SPlayer-Dev/SPlayer-Next'
     name: Build on ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     strategy:

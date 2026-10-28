@@ -127,6 +127,28 @@ describe.each(["win32", "linux"])("统一更新任务（%s）", (platform) => {
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
+  it("稳定版和 Nightly 始终从增强 Fork 更新，不覆盖为上游版本", async () => {
+    const service = await import("./updater");
+    service.initUpdater();
+    service.checkForUpdates(true);
+    await flushPromises();
+    expect(mocks.feed).toHaveBeenLastCalledWith({
+      provider: "github",
+      owner: "baek-nanxun",
+      repo: "SPlayer-Next",
+    });
+    expect(service.getUpdateState().meta?.releaseUrl).toBe(
+      "https://github.com/baek-nanxun/SPlayer-Next/releases/tag/v1.3.0",
+    );
+    mocks.channel = "nightly";
+    service.syncUpdateChannel();
+    await flushPromises();
+    expect(mocks.feed).toHaveBeenLastCalledWith({
+      provider: "generic",
+      url: "https://github.com/baek-nanxun/SPlayer-Next/releases/download/nightly",
+    });
+  });
+
   it("检查期间切换 A→B→A，旧结果不展示且只检查最后通道", async () => {
     const pending = deferred<typeof available>();
     mocks.check.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(none);

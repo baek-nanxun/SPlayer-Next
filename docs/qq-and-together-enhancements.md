@@ -26,7 +26,7 @@ QQ 音乐可以从主账号入口通过 QQ 或微信扫码登录，与网易云�
 
 2026 年 10 月 27 日，本次基于上游 dev 的整合源码通过 573 项 Vitest 测试、90 项 Node 测试、node／web 类型检查、全库 ESLint、改动文件格式化与 electron-vite 构建。原生模块未改动，本次未重新编译 Rust 或验证其他平台安装包。
 
-目前安装包更新配置仍沿用上游；直接安装上游更新会覆盖增强功能。使用增强版时应手动安装本 Fork 对应的增强安装包，源码推送不代表已经发布了新的安装包。
+从 1.2.2 开始，安装包与应用检查更新均使用本 Fork 的 Releases。旧版仍使用上游更新地址，需要先手动安装一次 1.2.2 或更新的增强版；之后可以在应用内检查增强版更新。
 
 ## 1.2.1+qq.7 一起听修复
 
@@ -43,3 +43,15 @@ QQ 音乐可以从主账号入口通过 QQ 或微信扫码登录，与网易云�
 内存记录来自启动后一分钟的日志：修复前 Browser／GPU／Network／主界面分别为 378／331／84／246 MB，修复后为 384／349／83／239 MB。修复后样本已执行播放和聊天联调再回首页，属于单次采样，不代表长期内存趋势。
 
 源码与构建方式沿用上游 README 和 package.json。账号 Cookie、用户数据库、私人房间邀请、测试配置与本地备份不属于仓库内容。QQ 协议字段参考 qmtui，对应 MIT 许可保留于 THIRD_PARTY_NOTICES/qmtui-LICENSE.txt。
+
+## 自动构建与发布
+
+固定下载入口：[增强版 Releases](https://github.com/baek-nanxun/SPlayer-Next/releases)，构建进度见 [Actions](https://github.com/baek-nanxun/SPlayer-Next/actions)。
+
+- 正式版：提高 package.json 的版本号并推送到 dev，Release 工作流完成检查、测试、六个平台／架构的原生构建、安装包与更新清单校验后，自动创建版本标签并公开发布。已经公开的版本不会被删除或替换，后续发布请提高版本号
+- 手动正式版：Actions → Release → Run workflow，选择 dev，tag 留空即可发布当前版本；也可填写与 package.json 一致的已有 v* 标签。直接推送 v* 标签也支持
+- Nightly：普通源码改动推送到 dev 后自动发布到固定 nightly 版本页；每天凌晨 2 点也会检查新提交，无新提交则跳过。版本号变更由正式发布流程处理，避免同一推送重复编译。应用设置选择 Nightly 通道后才会接收测试版
+- 平台：Windows x64／arm64、macOS x64／arm64、Linux x64／arm64。Linux 提供 deb、AppImage 等格式。GitHub 编译成功不代表各平台都完成了人工功能测试；macOS 安装包未签名、未公证
+- 只有全部构建成功才公开正式版，并附带 SHA256SUMS.txt。失败时查看 Actions 中的具体步骤，修复后提高版本号或重跑尚未发布的任务
+
+工作流使用 GitHub 自动提供的 GITHUB_TOKEN，不需要把个人访问令牌、音乐账号 Cookie 或本机数据库放入仓库。首次 Fork 时需在 Actions 页面启用工作流。构建目录和安装包保存在 Actions／Releases，不提交到 Git 源码历史。

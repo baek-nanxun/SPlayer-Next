@@ -24,6 +24,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.repository == 'SPlayer-Dev/SPlayer-Next'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
