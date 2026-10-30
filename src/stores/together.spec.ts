@@ -144,6 +144,57 @@ it("建房和加入时同步当前账号头像", async () => {
   expect(mocks.join).toHaveBeenCalledWith("invite", "听友", "https://example.com/avatar.jpg");
 });
 
+it("聊天红点只累计对方的新消息，重复快照不重计且打开后清除", async () => {
+  const room = useTogetherStore();
+  await flushPromises();
+  const frame = state(1, 2);
+  frame.memberId = "me";
+  frame.snapshot!.chat = [{ id: 1, senderId: "other", name: "听友", text: "你好" }];
+  mocks.receive!(frame);
+  await flushPromises();
+  expect(room.unreadChat).toBe(1);
+  mocks.receive!(structuredClone(frame));
+  expect(room.unreadChat).toBe(1);
+  frame.snapshot!.chat.push({ id: 2, senderId: "me", name: "听友", text: "我发的" });
+  mocks.receive!(structuredClone(frame));
+  expect(room.unreadChat).toBe(1);
+  room.chatOpen = true;
+  expect(room.unreadChat).toBe(0);
+  frame.snapshot!.chat.push({ id: 3, senderId: "other", name: "听友", text: "已打开" });
+  mocks.receive!(structuredClone(frame));
+  expect(room.unreadChat).toBe(0);
+  room.chatOpen = false;
+  frame.snapshot!.chat.push({ id: 4, senderId: "other", name: "听友", text: "新消息" });
+  mocks.receive!(structuredClone(frame));
+  expect(room.unreadChat).toBe(1);
+  mocks.receive!({ ...frame, connection: "idle", snapshot: null });
+  expect(room.unreadChat).toBe(0);
+});
+
+it("聊天保留 50 条时仍识别新消息，换房清除旧的未读状态", async () => {
+  const room = useTogetherStore();
+  await flushPromises();
+  const frame = state(1, 2);
+  frame.memberId = "me";
+  frame.snapshot!.chat = Array.from({ length: 50 }, (_, i) => ({
+    id: i + 1,
+    senderId: "other",
+    name: "听友",
+    text: "消息",
+  }));
+  mocks.receive!(frame);
+  room.chatOpen = true;
+  room.chatOpen = false;
+  frame.snapshot!.chat = [
+    ...frame.snapshot!.chat.slice(1),
+    { id: 51, senderId: "other", name: "听友", text: "新消息" },
+  ];
+  mocks.receive!(structuredClone(frame));
+  expect(room.unreadChat).toBe(1);
+  mocks.receive!({ ...state(1, 2), invite: "another-room" });
+  expect(room.unreadChat).toBe(0);
+});
+
 it("正常播放领先于晚到快照时不回退，也不发出暂停命令", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   useTogetherStore();

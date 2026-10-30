@@ -6,7 +6,7 @@ const text = ref("");
 const sending = ref(false);
 const messages = useTemplateRef("messages");
 watch(
-  () => room.state.snapshot?.chat.length,
+  () => room.state.snapshot?.chat.at(-1)?.id,
   async () => {
     await nextTick();
     messages.value?.scrollTo({ top: messages.value.scrollHeight, behavior: "smooth" });

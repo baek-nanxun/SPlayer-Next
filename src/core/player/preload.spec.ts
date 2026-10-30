@@ -727,6 +727,50 @@ describe("一起听共享队列操作", () => {
 });
 
 describe("一起听模式与展示资料", () => {
+  it.each(["NETWORK_ERROR", "QQMUSIC_UNAVAILABLE"])(
+    "房间保留实际取源原因 %s，不统一提示会员权限",
+    async (error) => {
+      const { applyTogetherSnapshot } = await import("./index");
+      const { setTogetherControl } = await import("@/services/togetherBridge");
+      mocks.status.state = "idle";
+      mocks.status.currentSource = "";
+      mocks.consume.mockReturnValue(null);
+      mocks.resolve.mockImplementation(async (_track, options) => {
+        options.onError(error);
+        return null;
+      });
+      Object.assign(window, {
+        api: {
+          player: { stop: mocks.stop.mockResolvedValue({ success: true }), syncPlayMode: vi.fn() },
+        },
+      });
+      setTogetherControl(vi.fn());
+      try {
+        await expect(
+          applyTogetherSnapshot(
+            {
+              revision: 1,
+              queueRevision: 1,
+              serverTime: 0,
+              position: 0,
+              playing: true,
+              desiredPlaying: true,
+              index: 0,
+              tracks: [mocks.track as Track],
+              members: [],
+              elapsedMs: 0,
+              counting: false,
+              chat: [],
+            },
+            () => true,
+          ),
+        ).rejects.toThrow(`errors.${error}`);
+      } finally {
+        mocks.resolve.mockReset();
+        setTogetherControl(null);
+      }
+    },
+  );
   it("共享快照保留随机模式与封面，切歌不会强制重置成顺序", async () => {
     const { useStatusStore } = await import("@/stores/status");
     const status = useStatusStore();

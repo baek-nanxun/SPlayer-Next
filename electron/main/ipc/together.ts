@@ -13,6 +13,7 @@ import WebSocket from "ws";
 import { sendToMain } from "@main/utils/broadcast";
 import { cleanAvatar, cleanTracks, startTogetherServer } from "@main/services/together/room";
 import { TOGETHER_MAX_PAYLOAD } from "@shared/types/together";
+import { coreLog } from "@main/utils/logger";
 import type { TogetherStatus } from "@shared/types/together";
 
 /** 注册双人房间连接，凭据仅用于房间，不传音乐账号 Cookie */
@@ -69,6 +70,7 @@ export const registerTogetherIpc = (): void => {
     const epoch = generation,
       id = randomBytes(24).toString("base64url");
     state.invite = invite;
+    state.memberId = id;
     state.connection = "connecting";
     attempts = 0;
     /** 建立当前代次的 WebSocket */
@@ -148,11 +150,14 @@ export const registerTogetherIpc = (): void => {
                   avatar: cleanAvatar(m.avatar),
                 }),
               ),
-              chat: v.chat.map((c: { id: unknown; name: unknown; text: unknown }) => ({
-                id: Number(c.id) || 0,
-                name: String(c.name).slice(0, 40),
-                text: String(c.text).slice(0, 500),
-              })),
+              chat: v.chat.map(
+                (c: { id: unknown; senderId?: unknown; name: unknown; text: unknown }) => ({
+                  id: Number(c.id) || 0,
+                  senderId: typeof c.senderId === "string" ? c.senderId.slice(0, 80) : undefined,
+                  name: String(c.name).slice(0, 40),
+                  text: String(c.text).slice(0, 500),
+                }),
+              ),
             };
             state = { ...state, connection: "connected", snapshot: msg.state, error: "" };
             attempts = 0;
@@ -216,7 +221,7 @@ export const registerTogetherIpc = (): void => {
     const api = createQQTogetherApi(qmRequest, () => {
       const current = getQQMusicCookies();
       const musicKey = current.qm_keyst || current.qqmusic_key || "";
-      if (getQQMusicUin() !== uin || musicKey !== key)
+      if (getQQMusicUin() !== uin || !musicKey)
         throw new Error("QQ 音乐账号已变更，请重新加入房间");
       return { uin, musicKey };
     });
@@ -364,8 +369,17 @@ export const registerTogetherIpc = (): void => {
     return;
   });
   ipcMain.handle("together:leave", async () => {
-    if (official) await official.leave();
+    const previous = official;
+    official = null;
     leave();
+    try {
+      await previous?.leave();
+    } catch (error) {
+      coreLog.warn("[together] 已停止本机同步，官方退房未确认", error);
+      throw new Error("已退出本机一起听，官方退房未确认；如官方 App 仍在房间中，请在 App 内退出");
+    } finally {
+      previous?.stop();
+    }
   });
   app.once("before-quit", leave);
 };

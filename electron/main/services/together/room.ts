@@ -478,6 +478,7 @@ export const startTogetherServer = async (port = 0, host = "0.0.0.0") => {
             ...room.chat.slice(-49),
             {
               id: ++chatId,
+              senderId: p.id,
               name: room.members.get(p.id)!.name,
               text: msg.text.trim().slice(0, 500),
             },

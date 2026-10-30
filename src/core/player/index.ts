@@ -352,6 +352,7 @@ const loadTrackSourceWithFallback = async (
  * @param track - 要播放的 Track，为 null 时忽略
  * @param context - 本次播放的来源上下文
  * @param autoPlay - 是否自动播放，暂停态恢复（如源失效跳曲）时传 false，全程不发声
+ * @param onFailure - 向一起听同步流程保留实际加载失败原因
  */
 const loadTrack = async (
   track: Track | null,
@@ -359,6 +360,7 @@ const loadTrack = async (
   autoPlay = true,
   transitionResult?: IpcResponse<LoadResult>,
   transitionSource?: ResolvedTrackSource,
+  onFailure?: (error: string) => void,
 ): Promise<void> => {
   if (!track) return;
   // 跳过指定关键词歌曲
@@ -411,12 +413,14 @@ const loadTrack = async (
       status.state = "idle";
       void window.api.player.stop();
       useMediaStore().setLyric(null, null);
-      if (loaded.error) handleError(loaded.error);
+      if (loaded.error && !onFailure) handleError(loaded.error);
+      onFailure?.(loaded.error || ErrorCode.URL_RESOLVE_FAILED);
       shouldSkip = Boolean(loaded.error && isSkippableError(loaded.error));
     } else {
       const { result, resolved } = loaded;
+      if (!result.ok) onFailure?.(result.error || ErrorCode.UNKNOWN);
       if (!result.ok && result.error && isSkippableError(result.error)) {
-        handleError(result.error);
+        if (!onFailure) handleError(result.error);
         shouldSkip = true;
       } else if (result.ok) {
         // 用户主动触发的成功播放记入历史；initPlayer 的恢复路径走 load() 不经此处
@@ -425,7 +429,7 @@ const loadTrack = async (
           cacheScheduler.schedule(track.id, resolved.cacheRequest);
         }
         scheduleNextTrackPreload();
-      } else if (result.error) {
+      } else if (result.error && !onFailure) {
         handleError(result.error);
       }
     }
@@ -1647,10 +1651,13 @@ export const applyTogetherSnapshot = async (
     !status.currentSource ||
     status.state === "idle"
   ) {
-    await loadTrack(target, undefined, false);
+    let failure = "";
+    await loadTrack(target, undefined, false, undefined, undefined, (code) => {
+      failure = i18n.global.t(`errors.${code}`);
+    });
     if (!current()) return;
     if (status.state !== "paused" && status.state !== "playing")
-      throw new Error("歌曲无法播放，请检查对应平台账号及会员权限");
+      throw new Error(failure || "本机未能加载这首歌曲；听友会继续播放");
   }
   if (!current()) return;
   const pos = Math.min(

@@ -47,7 +47,12 @@ export const resolveQQMusicUrl = async (
 
     return {
       available: false,
-      errorCode: ErrorCode.URL_RESOLVE_FAILED,
+      errorCode:
+        body?.code === 403
+          ? ErrorCode.QQMUSIC_UNAVAILABLE
+          : body?.code === 502
+            ? ErrorCode.NETWORK_ERROR
+            : ErrorCode.URL_RESOLVE_FAILED,
     };
   } catch (err) {
     console.warn("[qqmusic] resolve URL failed:", err);

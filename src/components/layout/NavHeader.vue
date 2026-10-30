@@ -123,14 +123,21 @@ const onMenuSelect = (key: string): void => {
           together.state.mode !== 'netease' &&
           together.state.mode !== 'qqmusic'
         "
-        class="app-no-drag"
+        class="app-no-drag relative"
         variant="ghost"
         circle
         :size="36"
-        title="一起听聊天"
+        :title="together.unreadChat ? `一起听聊天 · ${together.unreadChat} 条未读` : '一起听聊天'"
         @click="together.chatOpen = !together.chatOpen"
       >
-        <template #icon><IconLucideMessageCircle /></template>
+        <template #icon>
+          <IconLucideMessageCircle />
+          <span
+            v-if="together.unreadChat"
+            aria-label="有未读消息"
+            class="absolute right-1 top-1 size-2 rounded-full bg-red-500 ring-2 ring-surface"
+          />
+        </template>
       </SButton>
       <NavUser />
       <SDropdownMenu :items="menuItems" @select="onMenuSelect">

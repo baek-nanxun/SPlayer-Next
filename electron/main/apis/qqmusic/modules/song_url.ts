@@ -110,6 +110,12 @@ const songUrl: QMModule = async (params) => {
     const body = {
       comm: {
         uin: uin !== "0" ? uin : "",
+        ...(musickey
+          ? {
+              authst: musickey,
+              tmeLoginType: Number(cookies.tmeLoginType) || (musickey.startsWith("W_X") ? 1 : 2),
+            }
+          : {}),
         format: "json",
         ct: 24,
         cv: 4747474,
@@ -219,11 +225,16 @@ const songUrl: QMModule = async (params) => {
     }
   } catch (err) {
     coreLog.error("[qm-song-url] 直链解析请求异常:", err);
+    return {
+      code: 502,
+      message: "QQ 播放地址请求失败，请检查网络后重试",
+      data: [{ id: mid, url: "" }],
+    };
   }
 
   return {
     code: 403,
-    message: "无法获取播放链接，可能需要 VIP 或无版权",
+    message: "QQ 音乐未返回该版本的播放地址，请尝试其他版本",
     data: [{ id: mid, url: "" }],
   };
 };

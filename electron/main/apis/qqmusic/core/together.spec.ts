@@ -148,6 +148,16 @@ it("接口请求期间账号变化后不消费旧房间响应", async () => {
   await expect(api.join("LUGC123")).rejects.toThrow("账号已变更");
 });
 
+it("同账号在请求期间刷新密钥不会被误判为切换账号", async () => {
+  request.mockImplementationOnce(async () => {
+    session.musicKey = "renewed-key";
+    return {} as never;
+  });
+  await expect(api.join("LUGC123")).resolves.toEqual({});
+  await api.quit("LUGC123");
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
 it("元数据批量读取保留原始歌曲类型，缺失列表不能伪装成功", async () => {
   request.mockResolvedValueOnce({
     tracks: [{ id: 11, type: 1, mid: "MID11", title: "一", interval: 300 }],

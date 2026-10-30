@@ -165,6 +165,7 @@ test("真实 WebSocket 双人控制、聊天、断线重连与房间隔离", asy
     await until(() => a.states.at(-1)?.desiredPlaying === false);
     b.send({ type: "chat", text: "一起听" });
     await until(() => a.states.at(-1)?.chat[0]?.text === "一起听");
+    assert.equal(a.states.at(-1)!.chat[0].senderId, ids[1]);
     a.send({ type: "chat", text: "第二条" });
     await until(() => b.states.at(-1)?.chat.length === 2);
     assert.equal(a.states.at(-1)!.chat.length, 2);

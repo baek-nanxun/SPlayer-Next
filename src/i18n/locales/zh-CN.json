@@ -2410,6 +2410,7 @@
     "NETWORK_ERROR": "音源连接失败，请检查网络或更换音源",
     "NETWORK_TIMEOUT": "音源响应超时，请检查网络或更换音源",
     "URL_RESOLVE_FAILED": "无法获取播放地址",
+    "QQMUSIC_UNAVAILABLE": "QQ 音乐未提供该版本的播放地址，请尝试其他版本；此提示不代表会员已失效",
     "NO_PLUGIN_AVAILABLE": "未找到可用的音源插件",
     "NETEASE_LOGIN_EXPIRED": "登录已失效，已切换为游客模式",
     "NETEASE_VIP_REQUIRED": "该歌曲需要会员或单独购买",

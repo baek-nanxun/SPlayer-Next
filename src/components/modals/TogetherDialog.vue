@@ -100,6 +100,11 @@ const chat = (): void => {
         <SButton v-if="!official" variant="secondary" @click="chat">
           <template #icon><IconLucideMessageCircle /></template>
           聊聊天
+          <span
+            v-if="room.unreadChat"
+            aria-label="有未读消息"
+            class="size-2 rounded-full bg-red-500"
+          />
         </SButton>
       </div>
       <div

@@ -10,6 +10,7 @@ import type {
   TogetherTrack,
 } from "../../../../shared/types/together";
 import { cleanAvatar } from "./room";
+import { coreLog } from "../../utils/logger";
 
 type QQApi = ReturnType<typeof createQQTogetherApi>;
 /** 将 QQ 原始元数据裁剪成当前房间使用的轻量曲目
@@ -53,6 +54,9 @@ export class QQMusicTogether {
   private playKey = "";
   private elapsed = 0;
   private countedAt = Date.now();
+  private missingRoomCount = 0;
+  private lastHeartbeatError = "";
+  private leaving: Promise<void> | null = null;
 
   /** 注入固定到同一个账号的协议入口
    * @param api - QQ 音乐官方房间接口
@@ -151,7 +155,14 @@ export class QQMusicTogether {
         .catch((error) => {
           if (this.stopped) return;
           const message = error instanceof Error ? error.message : "QQ 官方房间连接中断";
-          if (/inner=1100[01]\b/.test(message)) {
+          this.missingRoomCount = /inner=1100[01]\b/.test(message) ? this.missingRoomCount + 1 : 0;
+          if (message !== this.lastHeartbeatError || this.missingRoomCount === 3)
+            coreLog.warn("[qq-together] 心跳失败", {
+              message,
+              missingRoomCount: this.missingRoomCount,
+            });
+          this.lastHeartbeatError = message;
+          if (this.missingRoomCount >= 3) {
             this.stop();
             this.snapshot = null;
             this.state("idle", "QQ 音乐一起听已结束，请使用新邀请");
@@ -166,8 +177,11 @@ export class QQMusicTogether {
     if (!this.showID || this.stopped) return;
     const frame = await this.api.heartbeat(this.showID);
     if (this.stopped) return;
+    this.missingRoomCount = 0;
+    this.lastHeartbeatError = "";
     if (this.mediaVersion !== (frame.mediaVersion ?? 0)) {
       const queue = await this.api.playlist(this.showID);
+      if (this.stopped) return;
       const old = new Map(this.tracks.map((t) => [Number(t.extId), t]));
       const missing = queue.map((s) => s.songID).filter((id) => !old.has(id));
       for (let i = 0; i < missing.length; i += 100) {
@@ -222,7 +236,7 @@ export class QQMusicTogether {
       counting: playing && members.length >= 2 && this.localReady,
       chat: [],
     };
-    this.state("connected");
+    if (!this.stopped) this.state("connected");
   }
 
   /** 将本机歌曲解析为实际数字 ID 和歌曲类型，不用 MID 猜测
@@ -279,6 +293,7 @@ export class QQMusicTogether {
         const revision = this.revision;
         await this.refresh();
         if (
+          this.stopped ||
           !this.snapshot ||
           revision !== this.revision ||
           this.snapshot.position < this.tracks[this.snapshot.index].duration - 2000
@@ -292,6 +307,7 @@ export class QQMusicTogether {
       }
       if (value.type !== "command" || !value.command) throw new Error("QQ 官方房间暂不支持此操作");
       await this.refresh();
+      if (this.stopped) return;
       await this.control(value.command);
       await this.refresh();
     });
@@ -400,8 +416,10 @@ export class QQMusicTogether {
     if (!Number.isFinite(position) || position < 0 || position > tracks[index].duration)
       throw new Error("QQ 官方播放进度无效");
     const queue = await this.songList(tracks);
+    if (this.stopped) return;
     if (replace) {
       await this.api.control(this.showID, 1, queue, index, Math.round(position));
+      if (this.stopped) return;
       this.mediaVersion = -1;
       // 官方整表替换会启动首曲，纯入队操作需要恢复原暂停意图
       if (preserve && !s.playing)
@@ -416,13 +434,15 @@ export class QQMusicTogether {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
   }
-  /** 用户主动退出时仅移除本机音乐账号 */
-  async leave(): Promise<void> {
-    await this.enqueue(async () => {
+  /** 立即停止本机同步，再等待在途操作结束后退出官方房间，失败也不恢复轮询 */
+  leave(): Promise<void> {
+    if (this.leaving) return this.leaving;
+    this.stop();
+    this.snapshot = null;
+    this.state("idle");
+    this.leaving = this.serial.then(async () => {
       if (this.showID) await this.api.quit(this.showID);
-      this.stop();
-      this.snapshot = null;
-      this.state("idle");
     });
+    return this.leaving;
   }
 }

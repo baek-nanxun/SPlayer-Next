@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+vi.mock("../../utils/logger", () => ({ coreLog: { warn: vi.fn() } }));
 import { QQMusicTogether } from "./qqmusic";
 import type { createQQTogetherApi } from "../../apis/qqmusic/core/together";
 import type {
@@ -175,7 +176,7 @@ it("QQ 官方房间结束后不自动重建或影响其他房间", async () => {
   const { client, api, frames } = setup();
   await client.start(invite);
   api.heartbeat.mockRejectedValue(new Error("QM API 错误: outer=0 inner=11001"));
-  await vi.advanceTimersByTimeAsync(2100);
+  await vi.advanceTimersByTimeAsync(6100);
   expect(frames.at(-1)!.connection).toBe("idle");
   const count = api.heartbeat.mock.calls.length;
   await vi.advanceTimersByTimeAsync(30000);
@@ -286,4 +287,53 @@ it("重连自己创建的房间时恢复房主身份，不新建另一个房间"
   await client.start(invite);
   expect(frames.at(-1)!.hosting).toBe(true);
   expect(api.create).not.toHaveBeenCalled();
+});
+
+it("一次房间不可用先确认，下一轮成功后保持原房间和播放版本", async () => {
+  const { client, api, frames } = setup();
+  await client.start(invite);
+  const revision = frames.at(-1)!.snapshot!.revision;
+  api.heartbeat.mockRejectedValueOnce(new Error("QM API 错误: outer=0 inner=11000"));
+  await vi.advanceTimersByTimeAsync(2100);
+  expect(frames.at(-1)).toMatchObject({ connection: "reconnecting", snapshot: { revision } });
+  await vi.advanceTimersByTimeAsync(2100);
+  expect(frames.at(-1)).toMatchObject({ connection: "connected", snapshot: { revision } });
+  expect(api.join).toHaveBeenCalledOnce();
+  expect(api.quit).not.toHaveBeenCalled();
+});
+
+it("退房请求失败也立即停止同步，重复点击不会重复发请求", async () => {
+  const { client, api, frames } = setup();
+  await client.start(invite);
+  api.quit.mockRejectedValue(new Error("超时"));
+  const first = client.leave();
+  const second = client.leave();
+  expect(first).toBe(second);
+  expect(frames.at(-1)).toMatchObject({ connection: "idle", snapshot: null });
+  await expect(first).rejects.toThrow("超时");
+  const count = api.heartbeat.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(10000);
+  expect(api.heartbeat).toHaveBeenCalledTimes(count);
+  expect(api.quit).toHaveBeenCalledOnce();
+});
+
+it("退出期间晚到的心跳不得重新连接，也不再执行排队控制", async () => {
+  const { client, api, frames, state } = setup();
+  await client.start(invite);
+  let resolve!: (value: typeof state) => void;
+  api.heartbeat.mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  const command = client.send({ type: "command", command: { type: "pause" } });
+  await Promise.resolve();
+  const leaving = client.leave();
+  resolve(state);
+  await command;
+  await leaving;
+  expect(frames.at(-1)).toMatchObject({ connection: "idle", snapshot: null });
+  expect(api.control).not.toHaveBeenCalled();
+  expect(api.quit).toHaveBeenCalledOnce();
 });

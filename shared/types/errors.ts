@@ -31,6 +31,8 @@ export enum ErrorCode {
   // 在线源相关
   /** 无法获取播放地址（API + 插件都失败） */
   URL_RESOLVE_FAILED = "URL_RESOLVE_FAILED",
+  /** QQ 官方未给当前歌曲版本返回播放地址 */
+  QQMUSIC_UNAVAILABLE = "QQMUSIC_UNAVAILABLE",
   /** 未找到支持该平台的插件 */
   NO_PLUGIN_AVAILABLE = "NO_PLUGIN_AVAILABLE",
   /** 在线平台登录态已失效 */

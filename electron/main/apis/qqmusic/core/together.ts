@@ -109,7 +109,7 @@ export const createQQTogetherApi = (
   const identity = (): string => {
     const value = session();
     if (!/^[1-9]\d*$/.test(value.uin) || !value.musicKey) throw new Error("请先登录 QQ 音乐账号");
-    return `${value.uin}:${value.musicKey}`;
+    return value.uin;
   };
   /** 单次请求后校验会话未变更
    * @param method - 已核实的官方方法

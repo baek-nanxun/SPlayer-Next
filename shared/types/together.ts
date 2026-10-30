@@ -46,9 +46,10 @@ export interface TogetherSnapshot {
   members: Array<{ id: string; name: string; online: boolean; ready: boolean; avatar?: string }>;
   elapsedMs: number;
   counting: boolean;
-  chat: Array<{ id: number; name: string; text: string }>;
+  chat: Array<{ id: number; senderId?: string; name: string; text: string }>;
 }
 export interface TogetherStatus {
+  memberId?: string;
   mode?: "self" | "netease" | "qqmusic";
   connection: "idle" | "connecting" | "connected" | "reconnecting";
   invite: string;

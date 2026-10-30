@@ -31,7 +31,7 @@ beforeEach(() => {
 it("HTTP 拒绝保留状态码，不把 HTML 拒绝页误报成 JSON 解析失败", async () => {
   mocks.fetch.mockResolvedValue(new Response("denied", { status: 403 }));
   const result = await songUrl({ mid: "MID", level: "hq" });
-  expect(result).toMatchObject({ code: 403, data: [{ url: "" }] });
+  expect(result).toMatchObject({ code: 502, data: [{ url: "" }] });
   expect(mocks.error.mock.calls[0]?.[1]?.message).toContain("HTTP 403");
   expect(mocks.fetch).toHaveBeenCalledOnce();
 });
@@ -76,6 +76,19 @@ it("有直链时仍按候选顺序返回，不输出失败诊断", async () => {
     data: [{ url: "https://audio.example.com/track.mp3", level: "hq" }],
   });
   expect(mocks.warn).not.toHaveBeenCalled();
+});
+
+it.each([2, 1])("取源携带当前登录类型 %s 与音乐密钥，不能只依赖 Cookie", async (loginType) => {
+  mocks.cookies = { qm_keyst: "test-key", tmeLoginType: String(loginType) };
+  mocks.fetch.mockImplementation(async () =>
+    Response.json({ code: 0, req_0: { code: 0, data: { midurlinfo: [] } } }),
+  );
+  const result = await songUrl({ mid: "MID", level: "hq" });
+  expect(JSON.parse(mocks.fetch.mock.calls[0][1].body).comm).toMatchObject({
+    authst: "test-key",
+    tmeLoginType: loginType,
+  });
+  expect(result).toMatchObject({ code: 403 });
 });
 
 it("连续空地址不会逐首反复刷新凭据，超过一分钟后才允许再次刷新", async () => {

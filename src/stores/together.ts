@@ -22,6 +22,15 @@ export const useTogetherStore = defineStore("together", () => {
   });
   const playbackError = ref("");
   const chatOpen = ref(false);
+  const unreadChat = ref(0);
+  let lastChatId = 0;
+  watch(
+    chatOpen,
+    (open) => {
+      if (open) unreadChat.value = 0;
+    },
+    { flush: "sync" },
+  );
   const now = ref(Date.now());
   let receivedAt = Date.now();
   let generation = 0;
@@ -218,6 +227,22 @@ export const useTogetherStore = defineStore("together", () => {
    */
   const receive = (latest: TogetherStatus): void => {
     const old = state.value;
+    if (latest.invite !== old.invite || latest.connection === "idle") {
+      lastChatId = 0;
+      unreadChat.value = 0;
+      chatOpen.value = false;
+    }
+    const chat = latest.snapshot?.chat ?? [];
+    if (!chatOpen.value) {
+      unreadChat.value = Math.min(
+        99,
+        unreadChat.value +
+          chat.filter(
+            (item) => item.id > lastChatId && (!item.senderId || item.senderId !== latest.memberId),
+          ).length,
+      );
+    }
+    lastChatId = Math.max(lastChatId, ...chat.map((item) => item.id));
     state.value = latest;
     if (latest.connection === "connected") {
       const profile = useAccountStore().profile;
@@ -321,9 +346,25 @@ export const useTogetherStore = defineStore("together", () => {
   };
   /** 退出房间，停止共享播放 */
   const leave = async (): Promise<void> => {
-    await window.api.player.pause();
-    await window.api.together.leave();
-    playbackError.value = "";
+    void window.api.player.pause().catch(() => {});
+    try {
+      await window.api.together.leave();
+    } catch (error) {
+      toast.warning(String(error));
+    } finally {
+      playbackError.value = "";
+    }
   };
-  return { chatOpen, state, elapsed, durationLabel, playbackError, command, host, join, leave };
+  return {
+    chatOpen,
+    unreadChat,
+    state,
+    elapsed,
+    durationLabel,
+    playbackError,
+    command,
+    host,
+    join,
+    leave,
+  };
 });
