@@ -78,12 +78,12 @@ const integer = (value: unknown, name: string, min = 0): number => {
   return n;
 };
 
-/** 严格校验官方数字歌曲列表，不猜测 MID 对应的歌曲
+/** 严格校验官方数字歌曲列表，允许空房，不猜测 MID 对应的歌曲
  * @param value - 官方歌曲列表
  */
 const songs = (value: unknown): QQTogetherSong[] => {
-  if (!Array.isArray(value) || !value.length || value.length > 1000)
-    throw new Error("QQ 官方一起听队列需包含 1–1000 首歌曲");
+  if (!Array.isArray(value) || value.length > 1000)
+    throw new Error("QQ 官方一起听队列必须是数组且最多 1000 首歌曲");
   return value.map((raw, index) => {
     const song = raw as Partial<QQTogetherSong> | null;
     if (!song || typeof song.title !== "string" || song.title.length > 200)
@@ -155,15 +155,16 @@ export const createQQTogetherApi = (
       return result.track_info;
     },
     /** 创建单人房间，初始状态仍需回读确认，不在创建时向他人发消息
-     * @param list - 初始完整队列
+     * @param list - 初始完整队列，可为空
      * @param index - 当前歌曲索引
      * @param position - 毫秒进度
      */
     create: async (list: unknown, index: unknown, position: unknown) => {
       const queue = songs(list);
       const at = integer(index, "歌曲索引");
-      if (at >= queue.length) throw new Error("QQ 音乐歌曲索引超出队列");
+      if (queue.length ? at >= queue.length : at !== 0) throw new Error("QQ 音乐歌曲索引超出队列");
       const offset = integer(position, "进度");
+      if (!queue.length && offset !== 0) throw new Error("空房间播放进度必须为零");
       const result = await call<{
         entryInfo?: { roomInfo?: { showID?: string; createUin?: string } };
       }>("LightUGCRoomCreate", {
@@ -177,7 +178,7 @@ export const createQQTogetherApi = (
         musicWorldValid: 0,
         isAITogether: 0,
         isMatchStranger: 0,
-        songPlaying: queue[at],
+        songPlaying: queue[at] ?? { songID: 0, songType: 0, songIndex: 0, title: "" },
         songInfos: queue,
       });
       validRoomId(result?.entryInfo?.roomInfo?.showID);

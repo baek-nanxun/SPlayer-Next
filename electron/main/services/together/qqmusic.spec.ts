@@ -65,7 +65,16 @@ const setup = () => {
   const frames: TogetherStatus[] = [];
   const client = new QQMusicTogether(api, (frame) => frames.push(frame));
   instances.push(client);
-  return { client, api, state, frames };
+  return {
+    client,
+    api,
+    state,
+    frames,
+    empty: () => {
+      list = [];
+      state.songInfo = { playStatus: 0 };
+    },
+  };
 };
 beforeEach(() => {
   vi.useFakeTimers();
@@ -205,6 +214,67 @@ it("离线后绝不对另一方发出回退或暂停指令", async () => {
   client.stop();
   await client.send({ type: "command", command: { type: "pause" } });
   expect(api.control).not.toHaveBeenCalled();
+});
+
+it("先建空房并保持连接，不反复拉取空队列，也不发送播放控制", async () => {
+  const { client, api, frames, empty } = setup();
+  empty();
+  await client.host();
+  expect(api.create).toHaveBeenCalledWith([], 0, 0);
+  expect(frames.at(-1)).toMatchObject({
+    connection: "connected",
+    hosting: true,
+    snapshot: { tracks: [], index: -1, playing: false, counting: false, position: 0 },
+  });
+  expect(frames.at(-1)!.invite).not.toContain("songid");
+  await vi.advanceTimersByTimeAsync(6100);
+  expect(api.playlist).toHaveBeenCalledOnce();
+  expect(api.control).not.toHaveBeenCalled();
+});
+
+it("空房间可以先加入歌曲保持暂停，随后播放完整歌单", async () => {
+  const { client, api, frames, empty } = setup();
+  empty();
+  await client.host();
+  const tracks = [11, 22].map((id) => ({
+    source: "qqmusic" as const,
+    id: `MID${id}`,
+    extId: String(id),
+    title: String(id),
+    artists: [],
+    duration: 300000,
+  }));
+  await client.send({
+    type: "command",
+    command: { type: "enqueue", tracks: [tracks[0]], position: "end" },
+  });
+  expect(api.control.mock.calls.map((c) => c[1])).toEqual([1, 3]);
+  expect(frames.at(-1)!.snapshot).toMatchObject({ playing: false, index: 0 });
+  await client.send({ type: "command", command: { type: "queue", tracks, index: 1 } });
+  expect(frames.at(-1)!.snapshot).toMatchObject({ playing: true, index: 1 });
+  expect(frames.at(-1)!.snapshot!.tracks).toHaveLength(2);
+});
+
+it("加入另一端创建的空房后可直接选一首歌播放", async () => {
+  const { client, api, frames, empty } = setup();
+  empty();
+  await client.start(invite.replace("&songid=11", ""));
+  await client.send({
+    type: "command",
+    command: {
+      type: "playTrack",
+      track: {
+        source: "qqmusic",
+        id: "MID11",
+        extId: "11",
+        title: "一",
+        artists: [],
+        duration: 300000,
+      },
+    },
+  });
+  expect(api.control.mock.calls.map((c) => c[1])).toEqual([1, 4]);
+  expect(frames.at(-1)!.snapshot).toMatchObject({ playing: true, index: 0 });
 });
 
 it("重连自己创建的房间时恢复房主身份，不新建另一个房间", async () => {

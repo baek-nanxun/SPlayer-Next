@@ -68,14 +68,28 @@ it("创建时包含完整 274 首队列，并默认保持暂停", async () => {
 it("创建没有返回房间 ID 时不能宣布成功", async () => {
   await expect(api.create(queue, 0, 0)).rejects.toThrow("房间号无效");
 });
+it("允许创建空房间，使用官方空曲目字段且不夹带本机播放队列", async () => {
+  request.mockResolvedValue({ entryInfo: { roomInfo: { showID: "LUGC123" } } });
+  await api.create([], 0, 0);
+  expect(request.mock.calls[0][2]).toMatchObject({
+    playStatus: 2,
+    songPlaying: { songID: 0, songType: 0, songIndex: 0, title: "" },
+    songInfos: [],
+  });
+  await expect(api.create([], 1, 0)).rejects.toThrow("索引");
+  await expect(api.create([], 0, 1)).rejects.toThrow("进度");
+  expect(request).toHaveBeenCalledOnce();
+});
 it("心跳不携带播放或暂停指令", async () => {
   request.mockResolvedValue({ songInfo: { playStatus: 1, songOffset: 5000 }, users: [] });
   await api.heartbeat("LUGC123");
   expect(request.mock.calls[0][2]).toEqual({ showID: "LUGC123" });
   expect(request.mock.calls[0][1]).toBe("LightUGCRoomHeartBeat");
 });
-it("队列读取失败不能把空列表或单曲作为完整列表返回", async () => {
-  await expect(api.playlist("LUGC123")).rejects.toThrow("1–1000");
+it("区分有效空队列与缺失队列字段，失败不能退回单曲", async () => {
+  await expect(api.playlist("LUGC123")).rejects.toThrow("必须是数组");
+  request.mockResolvedValue({ songList: [] });
+  await expect(api.playlist("LUGC123")).resolves.toEqual([]);
   request.mockResolvedValue({ songList: queue });
   await expect(api.playlist("LUGC123")).resolves.toEqual(queue);
   expect(request.mock.calls.at(-1)![2]).toEqual({ showID: "LUGC123", cmd: 0 });

@@ -261,9 +261,9 @@ export const registerTogetherIpc = (): void => {
     "together:hostQQMusic",
     async (_event, tracks: TogetherTrack[], index: number, position: number) => {
       if (state.connection !== "idle") throw new Error("请先退出当前一起听");
-      const cleaned = cleanTracks(tracks);
+      const cleaned = Array.isArray(tracks) && tracks.length === 0 ? [] : cleanTracks(tracks);
       if (cleaned.some((t) => t.source !== "qqmusic"))
-        throw new Error("请先选择并播放 QQ 音乐歌单，再创建 QQ 官方房间");
+        throw new Error("QQ 官方房间仅支持 QQ 音乐歌曲");
       leave();
       official = qqClient();
       try {

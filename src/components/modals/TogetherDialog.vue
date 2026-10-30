@@ -1,19 +1,11 @@
 <script setup lang="ts">
 import { useTogetherStore } from "@/stores/together";
-import { queue as playerQueue } from "@/stores/queue";
-import { useStatusStore } from "@/stores/status";
 import { toast } from "@/composables/useToast";
 const open = defineModel<boolean>("open", { default: false });
 const room = useTogetherStore();
-const status = useStatusStore();
 const official = computed(() => room.state.mode === "netease" || room.state.mode === "qqmusic");
-/** 从当前 QQ 歌曲与完整队列创建官方房间 */
-const hostQQMusic = (): Promise<void> =>
-  window.api.together.hostQQMusic(
-    JSON.parse(JSON.stringify(playerQueue.value)),
-    status.playIndex,
-    status.position,
-  );
+/** 先创建暂停的 QQ 官方空房间，连接后再由任一方选歌 */
+const hostQQMusic = (): Promise<void> => window.api.together.hostQQMusic([], 0, 0);
 const invite = ref("");
 const address = ref("");
 const busy = ref(false);
@@ -144,7 +136,9 @@ const chat = (): void => {
       <SButton variant="secondary" :disabled="busy" @click="run(hostQQMusic)">
         创建 QQ 音乐官方一起听
       </SButton>
-      <p class="text-xs text-on-surface-variant">创建 QQ 房间前，先选择并播放一个 QQ 音乐歌单</p>
+      <p class="text-xs text-on-surface-variant">
+        可以先邀请听友，连接后再选择 QQ 音乐歌曲或歌单播放
+      </p>
       <SDivider />
       <SInput v-model="address" placeholder="可选：这台电脑的 Tailscale / 局域网 IP" />
       <p class="text-xs text-on-surface-variant">

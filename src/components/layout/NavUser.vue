@@ -158,6 +158,7 @@ const handleLogout = async (): Promise<void> => {
           v-if="user.platform === 'qqmusic' && user.qqProfile?.isVip"
           :profile="user.qqProfile"
           compact
+          class="lt-sidebar:hidden"
         />
         <IconLucideChevronDown
           :class="[

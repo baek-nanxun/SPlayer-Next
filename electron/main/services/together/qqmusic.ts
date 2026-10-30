@@ -104,20 +104,24 @@ export class QQMusicTogether {
   }
 
   /** 从当前 QQ 播放队列创建官方房间
-   * @param tracks - 当前完整队列
+   * @param tracks - 初始队列，省略时先创建空房间
    * @param index - 当前歌曲位置
    * @param position - 当前毫秒进度
    */
-  async host(tracks: TogetherTrack[], index: number, position: number): Promise<void> {
+  async host(tracks: TogetherTrack[] = [], index = 0, position = 0): Promise<void> {
     this.state("connecting");
-    const queue = await this.songList(tracks);
-    if (!Number.isSafeInteger(index) || index < 0 || index >= queue.length)
-      throw new Error("请先选择一首 QQ 音乐歌曲");
+    const queue = tracks.length ? await this.songList(tracks) : [];
+    if (
+      !Number.isSafeInteger(index) ||
+      index < 0 ||
+      (queue.length ? index >= queue.length : index !== 0)
+    )
+      throw new Error("QQ 音乐歌曲索引无效");
     const created = await this.api.create(queue, index, Math.round(position));
     this.showID = created.entryInfo!.roomInfo!.showID!;
     this.hosting = true;
-    this.invite = `https://i.y.qq.com/n2/m/share/listen_together/index.html?showid=${this.showID}&songid=${queue[index].songID}`;
-    await this.api.control(this.showID, 3, queue, index, Math.round(position));
+    this.invite = `https://i.y.qq.com/n2/m/share/listen_together/index.html?showid=${this.showID}${queue.length ? `&songid=${queue[index].songID}` : ""}`;
+    if (queue.length) await this.api.control(this.showID, 3, queue, index, Math.round(position));
     await this.refresh();
     this.schedule();
   }
@@ -162,7 +166,7 @@ export class QQMusicTogether {
     if (!this.showID || this.stopped) return;
     const frame = await this.api.heartbeat(this.showID);
     if (this.stopped) return;
-    if (this.mediaVersion !== frame.mediaVersion || !this.queue.length) {
+    if (this.mediaVersion !== (frame.mediaVersion ?? 0)) {
       const queue = await this.api.playlist(this.showID);
       const old = new Map(this.tracks.map((t) => [Number(t.extId), t]));
       const missing = queue.map((s) => s.songID).filter((id) => !old.has(id));
@@ -182,7 +186,7 @@ export class QQMusicTogether {
     const info = frame.songInfo;
     const currentId = info.playingSongInfo?.songID;
     const index = this.queue.findIndex((s) => s.songID === currentId);
-    if (index < 0) {
+    if (index < 0 && this.queue.length) {
       this.mediaVersion = -1;
       throw new Error("QQ 房间正在更新当前歌曲，稍后重试");
     }
@@ -192,7 +196,7 @@ export class QQMusicTogether {
       this.revision++;
       this.localReady = false;
     }
-    const playing = info.playStatus === 1;
+    const playing = index >= 0 && info.playStatus === 1;
     const now = Date.now();
     if (this.snapshot?.counting) this.elapsed += Math.max(0, now - this.countedAt);
     this.countedAt = now;
@@ -209,7 +213,8 @@ export class QQMusicTogether {
       serverTime: now,
       tracks: this.tracks,
       index,
-      position: Math.min(this.tracks[index].duration, Math.max(0, info.songOffset || 0)),
+      position:
+        index >= 0 ? Math.min(this.tracks[index].duration, Math.max(0, info.songOffset || 0)) : 0,
       playing,
       desiredPlaying: playing,
       members,
@@ -348,12 +353,14 @@ export class QQMusicTogether {
         );
         if (!fresh.length) return;
         tracks.splice(command.position === "end" ? tracks.length : index + 1, 0, ...fresh);
+        if (index < 0) index = 0;
         replace = true;
         preserve = true;
         break;
       }
       case "remove": {
         const target = tracks[index];
+        if (!target) return;
         tracks = tracks.filter(
           (t) => t.id !== command.track.id || t.source !== command.track.source,
         );
@@ -396,6 +403,9 @@ export class QQMusicTogether {
     if (replace) {
       await this.api.control(this.showID, 1, queue, index, Math.round(position));
       this.mediaVersion = -1;
+      // 官方整表替换会启动首曲，纯入队操作需要恢复原暂停意图
+      if (preserve && !s.playing)
+        await this.api.control(this.showID, 3, queue, index, Math.round(position));
     }
     if (!preserve) await this.api.control(this.showID, cmd, queue, index, Math.round(position));
   }

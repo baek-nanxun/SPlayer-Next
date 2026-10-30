@@ -64,6 +64,29 @@ interface VkeyResponse {
   };
 }
 
+/** 只保留最近一个账号的刷新状态，空地址不能不断触发登录刷新 */
+let lastRefresh: { uin: string; at: number; pending?: Promise<boolean> } | null = null;
+
+/** 同账号合并并发刷新，连续取源失败时每分钟最多刷新一次 */
+const refreshForMissingUrl = async (): Promise<boolean> => {
+  const uin = getQQMusicUin();
+  if (lastRefresh?.uin === uin) {
+    if (lastRefresh.pending) return lastRefresh.pending;
+    if (Date.now() - lastRefresh.at < 60000) return false;
+  }
+  const attempt = { uin, at: Date.now(), pending: refreshQMCredential() };
+  lastRefresh = attempt;
+  try {
+    return await attempt.pending;
+  } finally {
+    if (lastRefresh === attempt) lastRefresh.pending = undefined;
+  }
+};
+
+/**
+ * 解析 QQ 歌曲直链，并保留失败诊断供跨设备排查
+ * @param params - 歌曲 MID、媒体 MID 和首选音质
+ */
 const songUrl: QMModule = async (params) => {
   const mid = String(params.mid || params.id || "").trim();
   if (!mid) return { code: 400, message: "missing mid" };
@@ -75,6 +98,7 @@ const songUrl: QMModule = async (params) => {
   const candidates = getQualityCandidates(targetLevel);
   const filenames = candidates.map((c) => `${c.prefix}${fileBase}${c.ext}`);
 
+  /** 请求候选音质，只记录不含凭据与签名链接的失败摘要 */
   const requestUrl = async () => {
     const cookies = getQQMusicCookies();
     const uin = getQQMusicUin();
@@ -125,13 +149,14 @@ const songUrl: QMModule = async (params) => {
       signal: AbortSignal.timeout(8000),
     });
 
+    if (!res.ok) throw new Error(`QQ 播放地址请求失败（HTTP ${res.status}）`);
     const json = (await res.json()) as VkeyResponse;
     const data = json.code === 0 && json.req_0?.code === 0 ? json.req_0.data : null;
     const infos = data?.midurlinfo ?? [];
     const sip =
       data?.sip?.find((s) => s.startsWith("http")) || "https://isure.stream.qqmusic.qq.com/";
 
-    return candidates
+    const matched = candidates
       .map((cand) => {
         const matchFilename = `${cand.prefix}${fileBase}${cand.ext}`;
         const found = infos.find((item) => item.filename === matchFilename && !!item.purl);
@@ -143,6 +168,18 @@ const songUrl: QMModule = async (params) => {
           : undefined;
       })
       .find((item): item is NonNullable<typeof item> => !!item);
+    if (!matched)
+      coreLog.warn("[qm-song-url] 官方接口未返回可播放地址", {
+        mid,
+        level: targetLevel,
+        authenticated: !!musickey,
+        mediaMidProvided: !!mediaMid,
+        httpStatus: res.status,
+        outerCode: json.code,
+        innerCode: json.req_0?.code,
+        resultCodes: infos.slice(0, candidates.length).map((item) => item.result),
+      });
+    return matched;
   };
 
   const cookies = getQQMusicCookies();
@@ -156,8 +193,7 @@ const songUrl: QMModule = async (params) => {
   try {
     let matched = await requestUrl();
     if (!matched && hasCredential) {
-      coreLog.warn("[qm-song-url] 携带凭据未命中播放直链，尝试刷新凭据重试");
-      const refreshed = await refreshQMCredential();
+      const refreshed = await refreshForMissingUrl();
       if (refreshed) {
         matched = await requestUrl();
       }
