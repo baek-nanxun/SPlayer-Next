@@ -19,6 +19,7 @@ import type { TogetherStatus } from "@shared/types/together";
 /** 注册双人房间连接，凭据仅用于房间，不传音乐账号 Cookie */
 export const registerTogetherIpc = (): void => {
   let official: NeteaseTogether | QQMusicTogether | null = null;
+  let leavingOfficial: Promise<void> | null = null;
   let server: Awaited<ReturnType<typeof startTogetherServer>> | null = null;
   let socket: WebSocket | null = null;
   let reconnect: ReturnType<typeof setTimeout> | null = null;
@@ -33,6 +34,11 @@ export const registerTogetherIpc = (): void => {
   };
   /** 推送连接状态 */
   const publish = (): void => sendToMain("together:status", state);
+  /** 退出确认完成前不启动新房间，避免同一账号的官方写请求交错 */
+  const assertIdle = (): void => {
+    if (leavingOfficial) throw new Error("上次退房正在确认，请稍候重试");
+    if (state.connection !== "idle") throw new Error("请先退出当前一起听");
+  };
   /** 关闭当前连接与本机房间 */
   const leave = (): void => {
     official?.stop();
@@ -265,16 +271,17 @@ export const registerTogetherIpc = (): void => {
   ipcMain.handle(
     "together:hostQQMusic",
     async (_event, tracks: TogetherTrack[], index: number, position: number) => {
-      if (state.connection !== "idle") throw new Error("请先退出当前一起听");
+      assertIdle();
       const cleaned = Array.isArray(tracks) && tracks.length === 0 ? [] : cleanTracks(tracks);
       if (cleaned.some((t) => t.source !== "qqmusic"))
         throw new Error("QQ 官方房间仅支持 QQ 音乐歌曲");
       leave();
-      official = qqClient();
+      const client = qqClient();
+      official = client;
       try {
-        await official.host(cleaned, index, position);
+        await client.host(cleaned, index, position);
       } catch (error) {
-        leave();
+        if (official === client) leave();
         throw error;
       }
     },
@@ -308,13 +315,14 @@ export const registerTogetherIpc = (): void => {
     throw new Error("网易云分享链接跳转过多");
   };
   ipcMain.handle("together:hostNetease", async () => {
-    if (state.connection !== "idle") throw new Error("请先退出当前一起听");
+    assertIdle();
     leave();
-    official = officialClient();
+    const client = officialClient();
+    official = client;
     try {
-      await official.start();
+      await client.start();
     } catch (error) {
-      leave();
+      if (official === client) leave();
       throw error;
     }
   });
@@ -322,22 +330,36 @@ export const registerTogetherIpc = (): void => {
   ipcMain.handle(
     "together:host",
     async (_event, name: string, address?: string, avatar?: string) => {
-      if (state.connection !== "idle") throw new Error("请先退出当前一起听");
+      assertIdle();
       const host = selectTogetherAddress(networkInterfaces(), address);
       leave();
-      server = await startTogetherServer();
+      const epoch = generation;
+      state.connection = "connecting";
       state.hosting = true;
-      const invite =
-        "splayer-together:" +
-        Buffer.from(
-          JSON.stringify({ url: `ws://${host}:${server.port}`, secret: server.secret }),
-        ).toString("base64url");
-      connect(invite, String(name), avatar);
-      return invite;
+      publish();
+      try {
+        const created = await startTogetherServer();
+        if (epoch !== generation) {
+          created.close();
+          throw new Error("本次建房已取消");
+        }
+        server = created;
+        const invite =
+          "splayer-together:" +
+          Buffer.from(
+            JSON.stringify({ url: `ws://${host}:${server.port}`, secret: server.secret }),
+          ).toString("base64url");
+        connect(invite, String(name), avatar);
+        return invite;
+      } catch (error) {
+        if (epoch === generation) leave();
+        throw error;
+      }
     },
   );
   ipcMain.handle("together:join", async (_event, invite: string, name: string, avatar?: string) => {
-    if (state.connection !== "idle") throw new Error("请先退出当前一起听");
+    assertIdle();
+    const epoch = generation;
     const value = String(invite).trim();
     if (value.includes("https://")) {
       const first = value.match(/https:\/\/[^\s<>"，。)]+/)?.[0];
@@ -347,12 +369,15 @@ export const registerTogetherIpc = (): void => {
           )
         : false;
       const link = await (qq ? resolveQQInvite(value) : resolveInvite(value));
+      if (epoch !== generation || state.connection !== "idle")
+        throw new Error("本次加入已取消，请使用当前房间");
       leave();
-      official = qq ? qqClient() : officialClient();
+      const client = qq ? qqClient() : officialClient();
+      official = client;
       try {
-        await official.start(link);
+        await client.start(link);
       } catch (error) {
-        leave();
+        if (official === client) leave();
         throw error;
       }
     } else {
@@ -369,17 +394,22 @@ export const registerTogetherIpc = (): void => {
     return;
   });
   ipcMain.handle("together:leave", async () => {
+    if (leavingOfficial) return leavingOfficial;
     const previous = official;
     official = null;
     leave();
-    try {
-      await previous?.leave();
-    } catch (error) {
-      coreLog.warn("[together] 已停止本机同步，官方退房未确认", error);
-      throw new Error("已退出本机一起听，官方退房未确认；如官方 App 仍在房间中，请在 App 内退出");
-    } finally {
-      previous?.stop();
-    }
+    if (!previous) return;
+    leavingOfficial = previous
+      .leave()
+      .catch((error) => {
+        coreLog.warn("[together] 已停止本机同步，官方退房未确认", error);
+        throw new Error("已退出本机一起听，官方退房未确认；如官方 App 仍在房间中，请在 App 内退出");
+      })
+      .finally(() => {
+        previous.stop();
+        leavingOfficial = null;
+      });
+    return leavingOfficial;
   });
   app.once("before-quit", leave);
 };

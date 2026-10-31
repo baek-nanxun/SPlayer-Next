@@ -337,3 +337,24 @@ it("退出期间晚到的心跳不得重新连接，也不再执行排队控制"
   expect(api.control).not.toHaveBeenCalled();
   expect(api.quit).toHaveBeenCalledOnce();
 });
+
+it("QQ 加入尚未返回就退出，晚到成功不恢复心跳且官方退出在加入后发出", async () => {
+  const { client, api, frames } = setup();
+  let finish!: () => void;
+  api.join.mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        finish = () => done({});
+      }),
+  );
+  const starting = client.start(invite);
+  await Promise.resolve();
+  const leaving = client.leave();
+  expect(api.quit).not.toHaveBeenCalled();
+  finish();
+  await starting;
+  await leaving;
+  expect(api.quit).toHaveBeenCalledExactlyOnceWith("LUGC123");
+  expect(api.heartbeat).not.toHaveBeenCalled();
+  expect(frames.at(-1)).toMatchObject({ connection: "idle", snapshot: null });
+});

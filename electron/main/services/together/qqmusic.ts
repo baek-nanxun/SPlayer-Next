@@ -91,7 +91,7 @@ export class QQMusicTogether {
     });
   }
 
-  /** 加入官方邀请并同步完整队列
+  /** 加入官方邀请并同步完整队列，退房需等待已发出的加入请求结束
    * @param invite - 展开后的官方分享链接
    */
   async start(invite: string): Promise<void> {
@@ -99,35 +99,42 @@ export class QQMusicTogether {
     this.invite = parsed.url;
     this.showID = parsed.showID;
     this.state("connecting");
-    const joined = await this.api.join(this.showID, parsed.fromEncryptedUin);
-    const entry = joined.entryInfo as { roomInfo?: { createUin?: string } } | undefined;
-    const creator = entry?.roomInfo?.createUin;
-    this.hosting = !!creator && this.ownUins.includes(creator);
-    await this.refresh();
-    this.schedule();
+    return this.enqueue(async () => {
+      const joined = await this.api.join(this.showID, parsed.fromEncryptedUin);
+      if (this.stopped) return;
+      const entry = joined.entryInfo as { roomInfo?: { createUin?: string } } | undefined;
+      const creator = entry?.roomInfo?.createUin;
+      this.hosting = !!creator && this.ownUins.includes(creator);
+      await this.refresh();
+      this.schedule();
+    });
   }
 
-  /** 从当前 QQ 播放队列创建官方房间
+  /** 从当前 QQ 队列建房，取消时保留晚到房间号供退出清理
    * @param tracks - 初始队列，省略时先创建空房间
    * @param index - 当前歌曲位置
    * @param position - 当前毫秒进度
    */
   async host(tracks: TogetherTrack[] = [], index = 0, position = 0): Promise<void> {
     this.state("connecting");
-    const queue = tracks.length ? await this.songList(tracks) : [];
-    if (
-      !Number.isSafeInteger(index) ||
-      index < 0 ||
-      (queue.length ? index >= queue.length : index !== 0)
-    )
-      throw new Error("QQ 音乐歌曲索引无效");
-    const created = await this.api.create(queue, index, Math.round(position));
-    this.showID = created.entryInfo!.roomInfo!.showID!;
-    this.hosting = true;
-    this.invite = `https://i.y.qq.com/n2/m/share/listen_together/index.html?showid=${this.showID}${queue.length ? `&songid=${queue[index].songID}` : ""}`;
-    if (queue.length) await this.api.control(this.showID, 3, queue, index, Math.round(position));
-    await this.refresh();
-    this.schedule();
+    return this.enqueue(async () => {
+      const queue = tracks.length ? await this.songList(tracks) : [];
+      if (this.stopped) return;
+      if (
+        !Number.isSafeInteger(index) ||
+        index < 0 ||
+        (queue.length ? index >= queue.length : index !== 0)
+      )
+        throw new Error("QQ 音乐歌曲索引无效");
+      const created = await this.api.create(queue, index, Math.round(position));
+      this.showID = created.entryInfo!.roomInfo!.showID!;
+      if (this.stopped) return;
+      this.hosting = true;
+      this.invite = `https://i.y.qq.com/n2/m/share/listen_together/index.html?showid=${this.showID}${queue.length ? `&songid=${queue[index].songID}` : ""}`;
+      if (queue.length) await this.api.control(this.showID, 3, queue, index, Math.round(position));
+      await this.refresh();
+      this.schedule();
+    });
   }
 
   /** 所有在途操作有界且串行，避免慢网重复发指令
