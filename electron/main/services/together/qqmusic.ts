@@ -51,6 +51,8 @@ export class QQMusicTogether {
   private revision = 0;
   private queueRevision = 0;
   private mediaVersion = -1;
+  private playMode = -1;
+  private randomIndexes: number[] = [];
   private playKey = "";
   private elapsed = 0;
   private countedAt = Date.now();
@@ -186,8 +188,17 @@ export class QQMusicTogether {
     if (this.stopped) return;
     this.missingRoomCount = 0;
     this.lastHeartbeatError = "";
-    if (this.mediaVersion !== (frame.mediaVersion ?? 0)) {
-      const queue = await this.api.playlist(this.showID);
+    const mode = frame.playMode ?? 0;
+    if (![0, 1, 2].includes(mode)) throw new Error("QQ 官方播放模式未识别");
+    if (
+      this.mediaVersion !== (frame.mediaVersion ?? 0) ||
+      this.playMode !== mode ||
+      (mode === 2 &&
+        this.queue[this.snapshot?.index ?? -1]?.songID !== frame.songInfo.playingSongInfo?.songID)
+    ) {
+      const list = await this.api.playlist(this.showID);
+      const queue = list.songs;
+      if (mode === 2 && !list.randomIndexes) throw new Error("QQ 官方未返回随机播放顺序");
       if (this.stopped) return;
       const old = new Map(this.tracks.map((t) => [Number(t.extId), t]));
       const missing = queue.map((s) => s.songID).filter((id) => !old.has(id));
@@ -203,6 +214,8 @@ export class QQMusicTogether {
       this.queue = queue;
       this.tracks = queue.map((s) => old.get(s.songID)!);
       this.mediaVersion = frame.mediaVersion ?? 0;
+      this.randomIndexes = list.randomIndexes ?? [];
+      this.playMode = mode;
     }
     const info = frame.songInfo;
     const currentId = info.playingSongInfo?.songID;
@@ -238,6 +251,8 @@ export class QQMusicTogether {
         index >= 0 ? Math.min(this.tracks[index].duration, Math.max(0, info.songOffset || 0)) : 0,
       playing,
       desiredPlaying: playing,
+      shuffleMode: mode === 2 ? "on" : "off",
+      repeatMode: mode === 1 ? "one" : "list",
       members,
       elapsedMs: this.elapsed,
       counting: playing && members.length >= 2 && this.localReady,
@@ -307,7 +322,9 @@ export class QQMusicTogether {
         )
           return;
         await this.control(
-          this.queue.length > 1 ? { type: "next" } : { type: "seek", position: 0 },
+          this.playMode !== 1 && this.queue.length > 1
+            ? { type: "next" }
+            : { type: "seek", position: 0 },
         );
         await this.refresh();
         return;
@@ -346,7 +363,14 @@ export class QQMusicTogether {
       case "next":
       case "prev":
         if (tracks.length < 2) throw new Error("队列只有一首歌，请先添加歌曲");
-        index = (index + (command.type === "next" ? 1 : -1) + tracks.length) % tracks.length;
+        if (this.playMode === 2) {
+          const at = this.randomIndexes.indexOf(index);
+          if (at < 0) throw new Error("QQ 官方随机播放顺序尚未同步");
+          index =
+            this.randomIndexes[
+              (at + (command.type === "next" ? 1 : -1) + tracks.length) % tracks.length
+            ];
+        } else index = (index + (command.type === "next" ? 1 : -1) + tracks.length) % tracks.length;
         position = 0;
         break;
       case "queue":
@@ -415,8 +439,15 @@ export class QQMusicTogether {
       }
       case "clear":
         throw new Error("QQ 官方房间暂不支持清空队列，请播放另一个歌单");
-      case "mode":
-        throw new Error("官方房间暂不支持同步播放模式，请使用自建房间");
+      case "mode": {
+        let mode = this.playMode;
+        if (command.shuffleMode === "on") mode = 2;
+        else if (command.repeatMode === "one") mode = 1;
+        else if (command.shuffleMode === "off" && mode === 2) mode = 0;
+        else if (command.repeatMode === "list" && mode === 1) mode = 0;
+        if (mode !== this.playMode) await this.api.setMode(this.showID, mode);
+        return;
+      }
     }
     if (!Number.isSafeInteger(index) || index < 0 || index >= tracks.length)
       throw new Error("QQ 官方歌曲索引无效");
@@ -426,6 +457,8 @@ export class QQMusicTogether {
     if (this.stopped) return;
     if (replace) {
       await this.api.control(this.showID, 1, queue, index, Math.round(position));
+      if (this.stopped) return;
+      if (this.playMode > 0) await this.api.setMode(this.showID, this.playMode);
       if (this.stopped) return;
       this.mediaVersion = -1;
       // 官方整表替换会启动首曲，纯入队操作需要恢复原暂停意图

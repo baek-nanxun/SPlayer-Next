@@ -218,13 +218,35 @@ export const createQQTogetherApi = (
     /** 读取完整队列，失败时不能退回单曲覆盖本机队列
      * @param showID - 房间号
      */
-    playlist: async (showID: unknown): Promise<QQTogetherSong[]> => {
-      const result = await call<{ songList?: unknown }>(
+    playlist: async (showID: unknown) => {
+      const result = await call<{ songList?: unknown; songRandomIndex?: unknown }>(
         "LightUGCRoomSongOper",
         { showID: validRoomId(showID), cmd: 0 },
         songService,
       );
-      return songs(result?.songList);
+      const list = songs(result?.songList);
+      const random = result.songRandomIndex;
+      if (
+        random !== undefined &&
+        (!Array.isArray(random) ||
+          random.length !== list.length ||
+          new Set(random).size !== list.length ||
+          random.some((i) => !Number.isSafeInteger(i) || i < 0 || i >= list.length))
+      )
+        throw new Error("QQ 官方随机播放顺序无效");
+      return { songs: list, randomIndexes: random as number[] | undefined };
+    },
+    /** 修改官方播放模式，不携带播放进度或替换队列
+     * @param showID - 房间号
+     * @param mode - 0 列表循环、1 单曲循环、2 随机播放
+     */
+    setMode: (showID: unknown, mode: number) => {
+      if (![0, 1, 2].includes(mode)) throw new Error("QQ 官方播放模式无效");
+      return call<Record<string, unknown>>(
+        "LightUGCRoomSongOper",
+        { showID: validRoomId(showID), cmd: 6, playMode: mode, sourceType: 0, playlistType: 0 },
+        songService,
+      );
     },
     /** 发出明确的用户播放操作
      * @param showID - 房间号

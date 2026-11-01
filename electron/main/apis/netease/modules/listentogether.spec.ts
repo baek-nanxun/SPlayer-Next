@@ -146,3 +146,34 @@ it("结束房间失败必须保留未退出的状态", async () => {
     listenTogetherModules.listentogether_end({ ...session, roomId: "room" }, request),
   ).rejects.toThrow("未成功");
 });
+
+it("官方模式与完整成员版本随随机列表一起同步", async () => {
+  const q = {
+    ...session,
+    roomId: "room",
+    userId: "2",
+    version: 8,
+    versions: [
+      { userId: 1, version: 6 },
+      { userId: 2, version: 7 },
+    ],
+    commandType: "REPLACE",
+    displayList: ["11", "22", "33"],
+    randomList: ["22", "11", "33"],
+  };
+  for (const playMode of ["ORDER_LOOP", "RANDOM", "SINGLE_LOOP"]) {
+    await listenTogetherModules.listentogether_sync_list_command({ ...q, playMode }, request);
+    expect(JSON.parse(String(request.mock.calls.at(-1)![1].playlistParam))).toMatchObject({
+      playMode,
+      version: [
+        { userId: "1", version: 6 },
+        { userId: "2", version: 8 },
+      ],
+      displayList: q.displayList,
+      randomList: q.randomList,
+    });
+  }
+  expect(() =>
+    listenTogetherModules.listentogether_sync_list_command({ ...q, playMode: "UNKNOWN" }, request),
+  ).toThrow("模式无效");
+});

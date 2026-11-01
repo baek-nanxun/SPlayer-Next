@@ -352,3 +352,25 @@ it("官方轮询暂时超时保留本机播放，恢复后不重新加载相同�
   expect(mocks.apply).not.toHaveBeenCalled();
   expect(mocks.send).toHaveBeenCalledWith({ type: "ready", revision: active.snapshot!.revision });
 });
+
+it("两种官方房间的模式指令可发送，回读模式不重载当前歌曲", async () => {
+  const room = useTogetherStore();
+  await flushPromises();
+  for (const mode of ["qqmusic", "netease"] as const) {
+    const frame = state(1, 2);
+    frame.mode = mode;
+    mocks.receive!(frame);
+    await flushPromises();
+    mocks.send.mockClear();
+    mocks.apply.mockClear();
+    room.command({ type: "mode", shuffleMode: "on" });
+    expect(mocks.send).toHaveBeenCalledWith({
+      type: "command",
+      command: { type: "mode", shuffleMode: "on" },
+    });
+    mocks.receive!({ ...frame, snapshot: { ...frame.snapshot!, shuffleMode: "on" } });
+    await flushPromises();
+    expect(mocks.queue.mock.calls.at(-1)![0].shuffleMode).toBe("on");
+    expect(mocks.apply).not.toHaveBeenCalled();
+  }
+});

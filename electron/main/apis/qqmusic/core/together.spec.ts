@@ -89,9 +89,12 @@ it("心跳不携带播放或暂停指令", async () => {
 it("区分有效空队列与缺失队列字段，失败不能退回单曲", async () => {
   await expect(api.playlist("LUGC123")).rejects.toThrow("必须是数组");
   request.mockResolvedValue({ songList: [] });
-  await expect(api.playlist("LUGC123")).resolves.toEqual([]);
+  await expect(api.playlist("LUGC123")).resolves.toEqual({ songs: [], randomIndexes: undefined });
   request.mockResolvedValue({ songList: queue });
-  await expect(api.playlist("LUGC123")).resolves.toEqual(queue);
+  await expect(api.playlist("LUGC123")).resolves.toEqual({
+    songs: queue,
+    randomIndexes: undefined,
+  });
   expect(request.mock.calls.at(-1)![2]).toEqual({ showID: "LUGC123", cmd: 0 });
 });
 it("播放暂停拖动均保留毫秒位置，切歌明确从零开始", async () => {
@@ -172,4 +175,26 @@ it("MID 仅通过官方歌曲详情解析，不强转为数字", async () => {
   });
   await expect(api.resolve("MID11")).resolves.toMatchObject({ id: 11, type: 1 });
   expect(request.mock.calls[0][2]).toEqual({ song_type: 0, song_mid: "MID11" });
+});
+
+it("播放模式使用已实测的 cmd6，未知模式不提交", async () => {
+  for (const mode of [0, 1, 2]) {
+    await api.setMode("LUGC123", mode);
+    expect(request.mock.calls.at(-1)![2]).toEqual({
+      showID: "LUGC123",
+      cmd: 6,
+      playMode: mode,
+      sourceType: 0,
+      playlistType: 0,
+    });
+  }
+  expect(() => api.setMode("LUGC123", 3)).toThrow("模式无效");
+});
+it("保留官方随机索引，拒绝缺歌、重复和越界排列", async () => {
+  request.mockResolvedValueOnce({ songList: queue, songRandomIndex: [1, 0] });
+  await expect(api.playlist("LUGC123")).resolves.toEqual({ songs: queue, randomIndexes: [1, 0] });
+  for (const songRandomIndex of [[0], [0, 0], [0, 2], ["0", "1"]]) {
+    request.mockResolvedValueOnce({ songList: queue, songRandomIndex });
+    await expect(api.playlist("LUGC123")).rejects.toThrow("随机播放顺序无效");
+  }
 });

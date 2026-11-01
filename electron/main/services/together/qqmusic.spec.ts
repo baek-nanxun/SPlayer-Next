@@ -19,6 +19,7 @@ const setup = () => {
       songPlayVersion: 1,
     },
     mediaVersion: 1,
+    playMode: 0,
     users: [
       { encryptUin: "one", nick: "听友一", headUrl: "https://example.com/a.jpg" },
       { encryptUin: "two", nick: "听友二", headUrl: "https://example.com/b.jpg" },
@@ -33,7 +34,14 @@ const setup = () => {
   const api = {
     join: vi.fn(async () => ({})),
     heartbeat: vi.fn(async () => structuredClone(state)),
-    playlist: vi.fn(async () => [...list]),
+    playlist: vi.fn(async () => ({
+      songs: [...list],
+      randomIndexes: list.length === 3 ? [0, 2, 1] : list.map((_, i) => i),
+    })),
+    setMode: vi.fn(async (_room, mode) => {
+      state.playMode = mode;
+      return {};
+    }),
     tracks: vi.fn(async (ids: number[]) =>
       ids.map((id) => ({
         id,
@@ -357,4 +365,65 @@ it("QQ 加入尚未返回就退出，晚到成功不恢复心跳且官方退出�
   expect(api.quit).toHaveBeenCalledExactlyOnceWith("LUGC123");
   expect(api.heartbeat).not.toHaveBeenCalled();
   expect(frames.at(-1)).toMatchObject({ connection: "idle", snapshot: null });
+});
+
+it("官方随机顺序决定切歌，模式切换与加歌不回退当前进度", async () => {
+  const { client, api, frames } = setup();
+  await client.start(invite);
+  await client.send({
+    type: "command",
+    command: {
+      type: "enqueue",
+      position: "end",
+      tracks: [
+        { source: "qqmusic", id: "MID33", extId: "33", title: "三", duration: 300000, artists: [] },
+      ],
+    },
+  });
+  const before = frames.at(-1)!.snapshot!;
+  api.control.mockClear();
+  await client.send({ type: "command", command: { type: "mode", shuffleMode: "on" } });
+  expect(frames.at(-1)!.snapshot).toMatchObject({
+    shuffleMode: "on",
+    repeatMode: "list",
+    position: before.position,
+    revision: before.revision,
+    queueRevision: before.queueRevision,
+  });
+  expect(api.control).not.toHaveBeenCalled();
+  await client.send({ type: "command", command: { type: "next" } });
+  expect(frames.at(-1)!.snapshot).toMatchObject({ index: 2, shuffleMode: "on" });
+  await client.send({ type: "command", command: { type: "prev" } });
+  expect(frames.at(-1)!.snapshot!.index).toBe(0);
+});
+it("官方 App 改模式无需更换媒体版本，失败不伪装为模式切换成功", async () => {
+  const { client, api, state, frames } = setup();
+  await client.start(invite);
+  const revision = frames.at(-1)!.snapshot!.revision;
+  state.playMode = 2;
+  await vi.advanceTimersByTimeAsync(2100);
+  expect(frames.at(-1)!.snapshot).toMatchObject({ shuffleMode: "on", revision });
+  expect(api.playlist).toHaveBeenCalledTimes(2);
+  api.setMode.mockRejectedValueOnce(new Error("权限拒绝"));
+  await expect(
+    client.send({ type: "command", command: { type: "mode", shuffleMode: "off" } }),
+  ).rejects.toThrow("权限拒绝");
+  expect(frames.at(-1)!.snapshot!.shuffleMode).toBe("on");
+});
+it("单曲循环在自然结束时重播当前曲，手动切歌仍可换歌", async () => {
+  const { client, api, state, frames } = setup();
+  await client.host([
+    { id: "MID11", extId: "11", source: "qqmusic", title: "一", artists: [], duration: 300000 },
+  ]);
+  await client.send({ type: "command", command: { type: "mode", repeatMode: "one" } });
+  expect(frames.at(-1)!.snapshot).toMatchObject({ repeatMode: "one", shuffleMode: "off" });
+  state.songInfo.playStatus = 1;
+  state.songInfo.songOffset = 300000;
+  await vi.advanceTimersByTimeAsync(2100);
+  api.control.mockClear();
+  await client.send({ type: "ended" });
+  expect(api.control.mock.calls[0]).toMatchObject({ 1: 7, 3: 0, 4: 0 });
+  expect(frames.at(-1)!.snapshot!.index).toBe(0);
+  await client.send({ type: "command", command: { type: "next" } });
+  expect(frames.at(-1)!.snapshot!.index).toBe(1);
 });

@@ -10,6 +10,8 @@ const setup = () => {
   const state = {
     ids: ["11", "22"],
     version: 1,
+    playMode: "ORDER_LOOP",
+    randomIds: ["11", "22"],
     inRoom: true,
     command: {
       targetSongId: "11",
@@ -41,6 +43,8 @@ const setup = () => {
           playCommand: { ...state.command },
           playlist: {
             displayList: { result: [...state.ids] },
+            randomList: { result: [...state.randomIds] },
+            playMode: state.playMode,
             version: [{ userId: 1, version: state.version }],
           },
         },
@@ -63,6 +67,8 @@ const setup = () => {
     if (name === "listentogether_sync_list_command") {
       state.ids = [...(p.displayList as string[])];
       state.version = Number(p.version);
+      state.playMode = String(p.playMode);
+      state.randomIds = [...(p.randomList as string[])];
       return { code: 200, data: { result: true } };
     }
     if (name === "listentogether_play_command") {
@@ -361,4 +367,104 @@ it("两份SPlayer共用官方房间时，任一端点歌、暂停与继续都会
   await vi.advanceTimersByTimeAsync(2100);
   expect(peerFrames.at(-1)!.snapshot!.playing).toBe(true);
   expect(api.mock.calls.filter(([name]) => name === "listentogether_play_command")).toHaveLength(3);
+});
+
+it("官方随机列表决定前后切歌，显示顺序和模式切换进度保持不变", async () => {
+  const { client, state, frames, api } = setup();
+  state.ids = ["11", "22", "33"];
+  state.randomIds = ["11", "33", "22"];
+  state.playMode = "RANDOM";
+  await client.start(invite);
+  expect(frames.at(-1)!.snapshot!.shuffleMode).toBe("on");
+  await client.send({ type: "command", command: { type: "next" } });
+  expect(frames.at(-1)!.snapshot!.index).toBe(2);
+  await client.send({ type: "command", command: { type: "prev" } });
+  expect(frames.at(-1)!.snapshot!.index).toBe(0);
+  await client.send({ type: "command", command: { type: "pause" } });
+  await client.send({ type: "command", command: { type: "seek", position: 12000 } });
+  const before = frames.at(-1)!.snapshot!;
+  api.mockClear();
+  await client.send({ type: "command", command: { type: "mode", repeatMode: "one" } });
+  expect(frames.at(-1)!.snapshot).toMatchObject({
+    repeatMode: "one",
+    shuffleMode: "off",
+    position: 12000,
+    playing: false,
+    revision: before.revision,
+  });
+  expect(frames.at(-1)!.snapshot!.tracks.map((t) => t.id)).toEqual(["11", "22", "33"]);
+  expect(api.mock.calls.some(([n]) => n === "listentogether_play_command")).toBe(false);
+});
+it("开启随机的完整列表与官方版本一同上报，加歌保留已有随机顺序", async () => {
+  const { client, state, api, frames } = setup();
+  state.ids = ["11", "22", "33"];
+  await client.start(invite);
+  await client.send({ type: "command", command: { type: "mode", shuffleMode: "on" } });
+  const first = [...state.randomIds];
+  expect([...first].sort()).toEqual(["11", "22", "33"]);
+  await client.send({
+    type: "command",
+    command: {
+      type: "enqueue",
+      position: "end",
+      tracks: [{ id: "44", source: "netease", title: "四", duration: 300000, artists: [] }],
+    },
+  });
+  expect(state.randomIds).toEqual([...first, "44"]);
+  expect(frames.at(-1)!.snapshot!.shuffleMode).toBe("on");
+  expect(
+    api.mock.calls.filter(([n]) => n === "listentogether_sync_list_command").at(-1)![1],
+  ).toMatchObject({ playMode: "RANDOM", versions: [{ userId: 1, version: 2 }] });
+});
+it("网易云自然结束遵循单曲循环，不执行顺序下一首", async () => {
+  const { client, state, api, frames } = setup();
+  state.inRoom = false;
+  state.playMode = "SINGLE_LOOP";
+  state.command.progress = 300000;
+  await client.start();
+  await client.send({ type: "ended" });
+  expect(
+    api.mock.calls.filter(([n]) => n === "listentogether_play_command").at(-1)![1],
+  ).toMatchObject({ commandType: "SEEK", targetSongId: "11", progress: 0 });
+  expect(frames.at(-1)!.snapshot!.repeatMode).toBe("one");
+});
+it("网易云建房未返回时退出，晚到成功会清理且不会恢复轮询", async () => {
+  const { client, state, api, frames } = setup();
+  state.inRoom = false;
+  const implementation = api.getMockImplementation()!;
+  let finish!: () => void;
+  api.mockImplementation(async (name, params) => {
+    if (name === "listentogether_room_create")
+      await new Promise<void>((done) => {
+        finish = done;
+      });
+    return implementation(name, params);
+  });
+  const starting = client.start();
+  await flushPromises();
+  const leaving = client.leave();
+  expect(frames.at(-1)!.connection).toBe("idle");
+  finish();
+  await starting;
+  await leaving;
+  await vi.advanceTimersByTimeAsync(15000);
+  expect(api.mock.calls.filter(([n]) => n === "listentogether_end")).toHaveLength(1);
+  expect(api.mock.calls.some(([n]) => n === "listentogether_sync_playlist_get")).toBe(false);
+  expect(state.inRoom).toBe(false);
+});
+it("网易云退房超时仍然停止本地同步，不重复提交退出", async () => {
+  const { client, api, frames } = setup();
+  await client.start(invite);
+  const implementation = api.getMockImplementation()!;
+  api.mockImplementation(async (name, params) => {
+    if (name === "listentogether_end") throw Error("timeout");
+    return implementation(name, params);
+  });
+  const leaving = client.leave();
+  expect(client.leave()).toBe(leaving);
+  await expect(leaving).rejects.toThrow("timeout");
+  const count = api.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(15000);
+  expect(api).toHaveBeenCalledTimes(count);
+  expect(frames.at(-1)).toMatchObject({ connection: "idle", snapshot: null });
 });

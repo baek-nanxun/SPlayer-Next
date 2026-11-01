@@ -65,10 +65,6 @@ export const useTogetherStore = defineStore("together", () => {
       toast.warning("房间连接中，请稍候");
       return;
     }
-    if (command.type === "mode" && ["netease", "qqmusic"].includes(state.value.mode ?? "")) {
-      toast.warning("官方房间暂不支持同步播放模式，请使用自建房间的随机或单曲循环");
-      return;
-    }
     // 新建官方房间为空时，点击当前歌曲会走播放开关，必须先同步本机列表
     if (command.type === "play" && !state.value.snapshot?.tracks.length) {
       const status = useStatusStore();

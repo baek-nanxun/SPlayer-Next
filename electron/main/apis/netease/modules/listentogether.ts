@@ -140,11 +140,28 @@ export const listenTogetherModules: Record<string, NeteaseModule> = {
       [...displayList].sort().some((id, i) => id !== sortedRandom[i])
     )
       throw new Error("网易云一起听随机列表与显示列表不一致");
+    const playMode = q.playMode ?? "ORDER_LOOP";
+    if (!["ORDER_LOOP", "RANDOM", "SINGLE_LOOP"].includes(String(playMode)))
+      throw new Error("网易云官方播放模式无效");
+    const userId = identifier(q, "userId");
+    const version = integer(q, "version");
+    const previous = q.versions ?? [];
+    if (!Array.isArray(previous) || previous.length > 20) throw new Error("网易云官方歌单版本无效");
+    const versions = previous
+      .map((v) => ({
+        userId: identifier({ userId: v.userId }, "userId"),
+        version: integer({ version: v.version }, "version"),
+      }))
+      .filter((v) => v.userId !== userId);
+    if (new Set(versions.map((v) => v.userId)).size !== versions.length)
+      throw new Error("网易云官方歌单版本重复");
+    versions.push({ userId, version });
     return call(q, request, "/api/listen/together/sync/list/command/report", {
       roomId: identifier(q, "roomId"),
       playlistParam: JSON.stringify({
         commandType: "REPLACE",
-        version: [{ userId: identifier(q, "userId"), version: integer(q, "version") }],
+        version: versions,
+        playMode,
         anchorSongId: "",
         anchorPosition: -1,
         displayList,

@@ -27,6 +27,8 @@ interface PlaylistData {
   playCommand?: PlayCommand;
   playlist?: {
     displayList?: { result?: string[] };
+    randomList?: { result?: string[] };
+    playMode?: string;
     version?: Array<{ userId: number; version: number }>;
   };
 }
@@ -70,6 +72,10 @@ export class NeteaseTogether {
   private idsKey = "";
   private seq = 0;
   private listVersion = 0;
+  private versions: Array<{ userId: number; version: number }> = [];
+  private randomIds: string[] = [];
+  private playMode = "ORDER_LOOP";
+  private leaving: Promise<void> | null = null;
   private serverOffset = 0;
   private heartbeatAt = 0;
   private statusAt = 0;
@@ -115,28 +121,32 @@ export class NeteaseTogether {
    */
   async start(invite?: string): Promise<void> {
     this.state("connecting");
-    const current = await this.api("listentogether_status");
-    const currentData = current.data as { inRoom?: boolean; roomInfo?: RoomInfo };
-    let data: { roomInfo?: RoomInfo };
-    if (invite) {
-      const parsed = parseNeteaseInvite(invite);
-      this.invite = parsed.url;
-      if (currentData?.inRoom && currentData.roomInfo?.roomId !== parsed.roomId)
-        throw new Error("网易云账号已在另一个官方房间，请先在官方 App 退出");
-      data = currentData?.inRoom
-        ? currentData
-        : ((await this.api("listentogether_accept", parsed)).data as typeof data);
-    } else {
-      if (currentData?.inRoom) throw new Error("网易云账号已有官方房间，请使用其分享链接加入");
-      this.hosting = true;
-      data = (await this.api("listentogether_room_create")).data as typeof data;
-    }
-    if (!data?.roomInfo?.roomId) throw new Error("网易云未返回有效房间");
-    this.room = data.roomInfo;
-    if (!this.invite)
-      this.invite = `https://st.music.163.com/listen-together/share/index.html?roomId=${encodeURIComponent(this.room.roomId)}&inviterId=${this.room.creatorId}`;
-    await this.refresh();
-    this.schedule();
+    return this.enqueue(async () => {
+      const current = await this.api("listentogether_status");
+      if (this.stopped) return;
+      const currentData = current.data as { inRoom?: boolean; roomInfo?: RoomInfo };
+      let data: { roomInfo?: RoomInfo };
+      if (invite) {
+        const parsed = parseNeteaseInvite(invite);
+        this.invite = parsed.url;
+        if (currentData?.inRoom && currentData.roomInfo?.roomId !== parsed.roomId)
+          throw new Error("网易云账号已在另一个官方房间，请先在官方 App 退出");
+        data = currentData?.inRoom
+          ? currentData
+          : ((await this.api("listentogether_accept", parsed)).data as typeof data);
+      } else {
+        if (currentData?.inRoom) throw new Error("网易云账号已有官方房间，请使用其分享链接加入");
+        this.hosting = true;
+        data = (await this.api("listentogether_room_create")).data as typeof data;
+      }
+      if (!data?.roomInfo?.roomId) throw new Error("网易云未返回有效房间");
+      this.room = data.roomInfo;
+      if (this.stopped) return;
+      if (!this.invite)
+        this.invite = `https://st.music.163.com/listen-together/share/index.html?roomId=${encodeURIComponent(this.room.roomId)}&inviterId=${this.room.creatorId}`;
+      await this.refresh();
+      this.schedule();
+    });
   }
 
   /** 将轮询或控制排入单一有界在途链
@@ -205,6 +215,7 @@ export class NeteaseTogether {
         inRoom?: boolean;
         roomInfo?: RoomInfo;
       };
+      if (this.stopped) return;
       if (!data?.inRoom || data.roomInfo?.roomId !== this.room.roomId) {
         this.stop();
         this.snapshot = null;
@@ -216,6 +227,10 @@ export class NeteaseTogether {
     }
     const data = (await this.read("listentogether_sync_playlist_get", { roomId: this.room.roomId }))
       .data as PlaylistData;
+    if (this.stopped) return;
+    const mode = data.playlist?.playMode ?? "ORDER_LOOP";
+    if (!["ORDER_LOOP", "RANDOM", "SINGLE_LOOP"].includes(mode))
+      throw new Error("网易云官方播放模式未识别");
     const command = data?.playCommand;
     const ids = (data?.playlist?.displayList?.result ?? []).map(String);
     if (ids.length > 2000 || ids.some((id) => !/^[1-9]\d{0,19}$/.test(id)))
@@ -223,12 +238,23 @@ export class NeteaseTogether {
     const target = String(command?.targetSongId || "");
     if (target && /^[1-9]\d{0,19}$/.test(target) && !ids.includes(target)) ids.push(target);
     if (ids.length > 2000) throw new Error("官方房间歌曲列表超过 2000 首");
+    const random = (data.playlist?.randomList?.result ?? []).map(String);
+    if (
+      mode === "RANDOM" &&
+      (random.length !== ids.length ||
+        new Set(random).size !== ids.length ||
+        random.some((id) => !ids.includes(id)))
+    )
+      throw new Error("网易云官方随机播放顺序无效");
+    this.randomIds = random;
+    this.playMode = mode;
     const key = ids.join(",");
     if (key !== this.idsKey) {
       const existing = new Map(this.tracks.map((t) => [t.id, t]));
       const missing = ids.filter((id) => !existing.has(id));
       for (let i = 0; i < missing.length; i += 500) {
         const result = await this.read("song_detail", { ids: missing.slice(i, i + 500).join(",") });
+        if (this.stopped) return;
         for (const song of (result.songs ?? []) as NeteaseSong[]) {
           const album = song.al ?? song.album;
           const cover = album?.picUrl ? `${album.picUrl}?param=300y300` : undefined;
@@ -253,6 +279,18 @@ export class NeteaseTogether {
       this.idsKey = key;
       this.queueRevision++;
     }
+    this.versions = data.playlist?.version ?? [];
+    if (
+      this.versions.length > 20 ||
+      this.versions.some(
+        (v) =>
+          !Number.isSafeInteger(v.userId) ||
+          v.userId <= 0 ||
+          !Number.isSafeInteger(v.version) ||
+          v.version < 0,
+      )
+    )
+      throw new Error("网易云官方歌单版本无效");
     this.listVersion = Math.max(
       this.listVersion,
       ...(data?.playlist?.version ?? []).map((v) => v.version),
@@ -306,6 +344,8 @@ export class NeteaseTogether {
       position,
       playing,
       desiredPlaying: playing,
+      shuffleMode: mode === "RANDOM" ? "on" : "off",
+      repeatMode: mode === "SINGLE_LOOP" ? "one" : "list",
       members,
       elapsedMs: this.elapsed,
       counting: playing && members.length >= 2 && this.localReady,
@@ -351,7 +391,8 @@ export class NeteaseTogether {
           this.localReady = false;
           return;
         }
-        if (this.tracks.length > 1) await this.control({ type: "next" });
+        if (this.playMode !== "SINGLE_LOOP" && this.tracks.length > 1)
+          await this.control({ type: "next" });
         else await this.control({ type: "seek", position: 0 });
         await this.refresh();
         return;
@@ -376,6 +417,7 @@ export class NeteaseTogether {
     let playing = snapshot.playing;
     let replace = false;
     let playCommand = "GOTO";
+    let mode = this.playMode;
     switch (command.type) {
       case "play":
         playing = true;
@@ -392,9 +434,10 @@ export class NeteaseTogether {
       case "next":
       case "prev": {
         if (tracks.length < 2) throw new Error("队列只有一首歌，请先添加歌曲");
-        const index =
-          (snapshot.index + (command.type === "next" ? 1 : -1) + tracks.length) % tracks.length;
-        target = tracks[index].id;
+        const order = this.playMode === "RANDOM" ? this.randomIds : tracks.map((t) => t.id);
+        const at = order.indexOf(formerSongId);
+        if (at < 0) throw new Error("网易云官方播放顺序尚未同步");
+        target = order[(at + (command.type === "next" ? 1 : -1) + order.length) % order.length];
         position = 0;
         break;
       }
@@ -454,7 +497,13 @@ export class NeteaseTogether {
       case "clear":
         throw new Error("官方一起听暂不支持清空列表，可以播放另一个歌单");
       case "mode":
-        throw new Error("官方房间暂不支持同步播放模式，请使用自建房间");
+        if (command.shuffleMode === "on") mode = "RANDOM";
+        else if (command.repeatMode === "one") mode = "SINGLE_LOOP";
+        else if (command.shuffleMode === "off" && mode === "RANDOM") mode = "ORDER_LOOP";
+        else if (command.repeatMode === "list" && mode === "SINGLE_LOOP") mode = "ORDER_LOOP";
+        if (mode === this.playMode) return;
+        replace = true;
+        break;
     }
     if (!tracks.length) {
       if (command.type === "pause") return;
@@ -474,6 +523,7 @@ export class NeteaseTogether {
       throw new Error("播放进度无效");
     if (replace) {
       const account = await this.api("user_account");
+      if (this.stopped) return;
       const userId =
         (account.profile as { userId?: number })?.userId ??
         (account.account as { id?: number })?.id;
@@ -483,9 +533,16 @@ export class NeteaseTogether {
         commandType: "REPLACE",
         userId,
         version: ++this.listVersion,
+        versions: this.versions,
+        playMode: mode,
         displayList: tracks.map((t) => t.id),
+        randomList: this.playOrder(tracks, mode),
       });
-      if (target === formerSongId && command.type !== "queue" && command.type !== "playTrack")
+      if (this.stopped) return;
+      if (
+        command.type === "mode" ||
+        (target === formerSongId && command.type !== "queue" && command.type !== "playTrack")
+      )
         return;
     }
     await this.api("listentogether_play_command", {
@@ -499,6 +556,25 @@ export class NeteaseTogether {
     });
   }
 
+  /** 保留官方随机顺序，队列变化只补入新歌，开启随机时重新洗牌
+   * @param tracks - 显示顺序中的歌曲
+   * @param mode - 目标官方模式
+   */
+  private playOrder(tracks: TogetherTrack[], mode: string): string[] {
+    const ids = tracks.map((t) => t.id);
+    if (mode !== "RANDOM") return ids;
+    if (this.playMode === "RANDOM")
+      return [
+        ...this.randomIds.filter((id) => ids.includes(id)),
+        ...ids.filter((id) => !this.randomIds.includes(id)),
+      ];
+    for (let i = ids.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+    }
+    return ids;
+  }
+
   /** 停止本机轮询，不自动结束对方的官方房间 */
   stop(): void {
     this.stopped = true;
@@ -506,13 +582,15 @@ export class NeteaseTogether {
     this.timer = null;
   }
 
-  /** 用户主动结束官方一起听后清理本机会话 */
-  async leave(): Promise<void> {
-    await this.enqueue(async () => {
+  /** 立即停止本机同步，等待晚到建房或加入响应后清理官方房间 */
+  leave(): Promise<void> {
+    if (this.leaving) return this.leaving;
+    this.stop();
+    this.snapshot = null;
+    this.state("idle");
+    this.leaving = this.serial.then(async () => {
       if (this.room) await this.api("listentogether_end", { roomId: this.room.roomId });
-      this.stop();
-      this.snapshot = null;
-      this.state("idle");
     });
+    return this.leaving;
   }
 }
