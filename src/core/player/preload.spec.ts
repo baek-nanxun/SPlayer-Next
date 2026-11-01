@@ -48,6 +48,7 @@ vi.mock("./stats", () => ({ installPlayStats: vi.fn(), onTrackEnded: mocks.onTra
 vi.mock("@/stores/settings", () => ({
   useSettingsStore: () => ({
     preset: { skipKeywordsSongs: false, skipTrackKeywords: [] },
+    system: { player: { autoPlay: false, rememberLastTrack: true } },
     player: { transitionMode: "crossfade", transitionPreference: mocks.transitionPreference },
   }),
 }));
@@ -841,5 +842,94 @@ describe("一起听模式与展示资料", () => {
     } finally {
       setTogetherControl(null);
     }
+  });
+});
+
+describe("冷启动恢复与房间连接互斥", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    vi.doMock("@/stores/status", () => ({ useStatusStore: () => mocks.status }));
+    vi.doMock("@/stores/queue", () => ({ updateQueueTracks: vi.fn() }));
+    mocks.status.currentTrack = { ...mocks.track, id: "old" };
+    mocks.media.track = { ...mocks.track, id: "old" };
+    mocks.status.position = 12000;
+    mocks.status.state = "paused";
+    mocks.resolve.mockReset();
+    mocks.load
+      .mockReset()
+      .mockResolvedValue({ success: true, data: { detail: {}, mediaInfo: { duration: 1000 } } });
+    Object.assign(window, {
+      api: {
+        player: {
+          load: mocks.load,
+          stop: mocks.stop,
+          seek: vi.fn().mockResolvedValue({ success: true }),
+        },
+      },
+    });
+  });
+  it("已加入房间时冷启动恢复不得覆盖共享曲目", async () => {
+    const { setTogetherControl } = await import("@/services/togetherBridge");
+    const { restoreLastTrack } = await import("./index");
+    const send = vi.fn();
+    setTogetherControl(send);
+    try {
+      await restoreLastTrack();
+      expect(mocks.resolve).not.toHaveBeenCalled();
+      expect(mocks.load).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      setTogetherControl(null);
+    }
+  });
+  it("旧歌取源晚到不能加载或向新房间发送记忆进度", async () => {
+    const { setTogetherControl } = await import("@/services/togetherBridge");
+    const { restoreLastTrack, invalidatePlaybackOperation } = await import("./index");
+    let finish!: (value: unknown) => void;
+    mocks.resolve.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          finish = done;
+        }),
+    );
+    mocks.status.position = 12000;
+    const restoring = restoreLastTrack();
+    await Promise.resolve();
+    const send = vi.fn();
+    setTogetherControl(send);
+    invalidatePlaybackOperation();
+    try {
+      finish({ source: "https://music/old", provider: "official", fromCache: false });
+      await restoring;
+      expect(mocks.load).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      setTogetherControl(null);
+    }
+  });
+  it("旧原生加载被新操作作废后，不把新播放状态清成空闲", async () => {
+    const { restoreLastTrack, invalidatePlaybackOperation } = await import("./index");
+    mocks.resolve.mockResolvedValueOnce({
+      source: "https://music/old",
+      provider: "official",
+      fromCache: false,
+    });
+    let finish!: (value: unknown) => void;
+    mocks.load.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          finish = done;
+        }),
+    );
+    const restoring = restoreLastTrack();
+    for (let i = 0; i < 10 && !finish; i++) await Promise.resolve();
+    invalidatePlaybackOperation();
+    mocks.status.state = "playing";
+    mocks.status.position = 45000;
+    finish({ success: true, data: { detail: {}, mediaInfo: { duration: 1000 } } });
+    await restoring;
+    expect(mocks.status.state).toBe("playing");
+    expect(mocks.status.position).toBe(45000);
   });
 });

@@ -1513,8 +1513,9 @@ export const initPlayer = async (): Promise<void> => {
   scheduleNextTrackPreload();
 };
 
-/** 恢复上次播放状态 */
+/** 恢复上次播放状态，房间或新点歌开始后放弃晚到结果 */
 export const restoreLastTrack = async (): Promise<void> => {
+  if (isTogetherActive()) return;
   const status = useStatusStore();
   const settings = useSettingsStore();
   const media = useMediaStore();
@@ -1523,6 +1524,9 @@ export const restoreLastTrack = async (): Promise<void> => {
     status.state = "idle";
     return;
   }
+  const myToken = ++trackToken;
+  /** 只允许本次恢复继续控制仍属于自己的播放会话 */
+  const current = (): boolean => myToken === trackToken && !isTogetherActive();
   isRestoringLastTrack = true;
   pendingPlayAfterRestore = false;
   const lastPosition = status.position;
@@ -1534,8 +1538,9 @@ export const restoreLastTrack = async (): Promise<void> => {
       lastTrack,
       status.currentPlaybackContext,
       settings.system.player.autoPlay,
-      () => true,
+      current,
     );
+    if (!current()) return;
     if (loaded.status === "loaded" && loaded.result.ok) {
       if (settings.system.player.rememberLastTrack && lastPosition > 0) {
         await seek(lastPosition);
