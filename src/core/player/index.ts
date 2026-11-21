@@ -374,6 +374,8 @@ const loadTrack = async (
     return;
   }
   const myToken = ++trackToken;
+  // 新曲乐观元数据不能与旧音源组成可播放状态，取消后必须重新取源
+  if (!transitionResult) useStatusStore().currentSource = null;
   // 消费预载结果
   const preloaded = transitionResult ? null : consumePreloadedTrack(track);
   // 乐观更新
@@ -1676,7 +1678,10 @@ export const applyTogetherSnapshot = async (
   playback.setCurrentTime(pos, { force: true });
   if (!current()) return;
   const res = await (snapshot.playing ? window.api.player.play() : window.api.player.pause());
-  if (!res.success) throw new Error("歌曲播放失败，请检查音源权限");
+  if (!res.success)
+    throw new Error(
+      res.error ? i18n.global.t(`errors.${res.error}`) : "歌曲播放失败，请检查音频输出设备",
+    );
   status.state = snapshot.playing ? "playing" : "paused";
   playback.setPlaying(snapshot.playing);
 };

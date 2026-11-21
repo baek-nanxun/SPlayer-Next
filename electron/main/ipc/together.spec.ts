@@ -27,7 +27,7 @@ vi.mock("@main/apis/netease", () => ({
 }));
 vi.mock("@main/apis/netease/core/direct", () => ({ fetchNeteaseDirect: vi.fn() }));
 vi.mock("@main/utils/broadcast", () => ({ sendToMain: mocks.publish }));
-vi.mock("@main/utils/logger", () => ({ coreLog: { warn: vi.fn() } }));
+vi.mock("@main/utils/logger", () => ({ coreLog: { warn: vi.fn(), info: vi.fn() } }));
 vi.mock("@main/services/together/room", async (original) => {
   const actual = await original<typeof import("@main/services/together/room")>();
   return {
@@ -184,4 +184,50 @@ it("清理 QQ 退出流程时不回归网易云官方结束请求", async () => 
   await invoke("leave");
   expect(mocks.netease).toHaveBeenCalledWith("listentogether_end", { roomId: "test-room" });
   expect(await invoke("status")).toMatchObject({ connection: "idle" });
+});
+
+it("自建精简快照沿用已验证列表，未变化心跳不丢歌或报响应无效", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  try {
+    await invoke("host", "听友", "127.0.0.1");
+    for (let i = 0; i < 100; i++) {
+      if (((await invoke("status")) as { connection: string }).connection === "connected") break;
+      await new Promise((done) => setTimeout(done, 5));
+    }
+    await invoke("send", {
+      type: "command",
+      command: {
+        type: "queue",
+        index: 0,
+        tracks: [{ source: "qqmusic", id: "MID11", title: "一", artists: [], duration: 300000 }],
+      },
+    });
+    for (let i = 0; i < 100; i++) {
+      if (
+        ((await invoke("status")) as { snapshot?: { tracks: unknown[] } }).snapshot?.tracks.length
+      )
+        break;
+      await new Promise((done) => setTimeout(done, 5));
+    }
+    await vi.advanceTimersByTimeAsync(5000);
+    await new Promise((done) => setTimeout(done, 20));
+    expect(await invoke("status")).toMatchObject({
+      connection: "connected",
+      error: "",
+      snapshot: { tracks: [{ id: "MID11" }] },
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+it("播放诊断只写本机日志，不把带凭据的错误发给听友", async () => {
+  const { coreLog } = await import("@main/utils/logger");
+  await invoke("send", {
+    type: "diagnostic",
+    event: "playback-error",
+    error: "加载 https://example.com/song?vkey=secret-value 超时",
+  });
+  const text = JSON.stringify(vi.mocked(coreLog.info).mock.calls);
+  expect(text).toContain("playback-error");
+  expect(text).not.toContain("secret-value");
 });

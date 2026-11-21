@@ -39,6 +39,7 @@ const track = (raw: QQTogetherTrackInfo): TogetherTrack => {
 export class QQMusicTogether {
   private showID = "";
   private invite = "";
+  private shareEncryptedUin = "";
   private hosting = false;
   private snapshot: TogetherSnapshot | null = null;
   private tracks: TogetherTrack[] = [];
@@ -76,6 +77,16 @@ export class QQMusicTogether {
    * @param error - 可选提示
    */
   private state(connection: TogetherStatus["connection"], error = ""): void {
+    const current = this.snapshot?.tracks[this.snapshot.index];
+    let appInvite: string | undefined;
+    if (this.shareEncryptedUin && current?.extId) {
+      const url = new URL("https://i.y.qq.com/n2/m/share/listen_together/index.html");
+      url.searchParams.set("showid", this.showID);
+      url.searchParams.set("share_encrypt_uin", this.shareEncryptedUin);
+      url.searchParams.set("songid", current.extId);
+      appInvite = url.href;
+      this.invite = appInvite;
+    }
     if (connection !== "connected" && this.snapshot) {
       const now = Date.now();
       if (this.snapshot.counting) this.elapsed += Math.max(0, now - this.countedAt);
@@ -87,6 +98,7 @@ export class QQMusicTogether {
       mode: "qqmusic",
       connection,
       invite: this.invite,
+      appInvite,
       hosting: this.hosting,
       error,
       snapshot: this.snapshot,
@@ -100,6 +112,7 @@ export class QQMusicTogether {
     const parsed = parseQQTogetherInvite(invite);
     this.invite = parsed.url;
     this.showID = parsed.showID;
+    this.shareEncryptedUin = parsed.fromEncryptedUin;
     this.state("connecting");
     return this.enqueue(async () => {
       const joined = await this.api.join(this.showID, parsed.fromEncryptedUin);
@@ -118,6 +131,7 @@ export class QQMusicTogether {
    * @param position - 当前毫秒进度
    */
   async host(tracks: TogetherTrack[] = [], index = 0, position = 0): Promise<void> {
+    this.shareEncryptedUin = this.ownUins[1] || "";
     this.state("connecting");
     return this.enqueue(async () => {
       const queue = tracks.length ? await this.songList(tracks) : [];

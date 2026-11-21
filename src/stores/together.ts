@@ -44,6 +44,8 @@ export const useTogetherStore = defineStore("together", () => {
   let localSample: { position: number; at: number } | null = null;
   let localReady: boolean | null = null;
   let profileSent = "";
+  let lastPlaybackError = "";
+  let lastErrorAt = 0;
   const elapsed = computed(() => {
     const s = state.value.snapshot;
     return s ? s.elapsedMs + (s.counting ? Math.max(0, now.value - receivedAt) : 0) : 0;
@@ -200,13 +202,27 @@ export const useTogetherStore = defineStore("together", () => {
           await applyTogetherSnapshot({ ...snapshot, position }, current);
           if (!current()) continue;
           applied = key;
+          if (playbackError.value)
+            void window.api.together
+              .send({ type: "diagnostic", event: "playback-recovered" })
+              .catch(() => {});
           playbackError.value = "";
+          lastPlaybackError = "";
           localReady = true;
           localSample = null;
-          await window.api.together.send({ type: "ready", revision: snapshot.revision });
+          await window.api.together
+            .send({ type: "ready", revision: snapshot.revision })
+            .catch(() => {});
         } catch (error) {
           if (!current()) continue;
           playbackError.value = error instanceof Error ? error.message : "无法同步歌曲";
+          if (playbackError.value !== lastPlaybackError || Date.now() - lastErrorAt >= 60000) {
+            lastPlaybackError = playbackError.value;
+            lastErrorAt = Date.now();
+            void window.api.together
+              .send({ type: "diagnostic", event: "playback-error", error: playbackError.value })
+              .catch(() => {});
+          }
           applied = "";
           retryAt = Date.now() + 5000;
           localReady = false;
@@ -223,6 +239,11 @@ export const useTogetherStore = defineStore("together", () => {
    */
   const receive = (latest: TogetherStatus): void => {
     const old = state.value;
+    if (latest.connection === "idle") {
+      playbackError.value = "";
+      lastPlaybackError = "";
+      lastErrorAt = 0;
+    }
     if (latest.invite !== old.invite || latest.connection === "idle") {
       lastChatId = 0;
       unreadChat.value = 0;
@@ -261,11 +282,7 @@ export const useTogetherStore = defineStore("together", () => {
     receivedAt = Date.now();
     now.value = receivedAt;
     setTogetherControl(latest.connection === "idle" ? null : command);
-    if (
-      latest.connection === "reconnecting" &&
-      (latest.mode === "netease" || latest.mode === "qqmusic") &&
-      latest.snapshot
-    ) {
+    if (latest.connection === "reconnecting" && latest.snapshot) {
       localReady = null;
       driftAt = 0;
       return;

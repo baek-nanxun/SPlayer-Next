@@ -53,6 +53,7 @@ export interface TogetherStatus {
   mode?: "self" | "netease" | "qqmusic";
   connection: "idle" | "connecting" | "connected" | "reconnecting";
   invite: string;
+  appInvite?: string;
   hosting: boolean;
   error: string;
   snapshot: TogetherSnapshot | null;

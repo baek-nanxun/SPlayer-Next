@@ -15,7 +15,8 @@ export const selectTogetherAddress = (interfaces: Interfaces, requested?: string
       .map((entry) => ({ name, address: entry.address })),
   );
   if (requested) {
-    if (isIP(requested) !== 4) throw new Error("请输入本机 IPv4 地址");
+    if (isIP(requested) !== 4)
+      throw new Error("只填写本机 IPv4，不含协议、端口或邀请码；也可留空自动选择 Tailscale 地址");
     if (requested !== "127.0.0.1" && !addresses.some((entry) => entry.address === requested))
       throw new Error("请填写创建房间这台电脑的 IP，而不是听友的 IP");
     return requested;

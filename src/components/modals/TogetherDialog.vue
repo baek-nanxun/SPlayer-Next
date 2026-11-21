@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useTogetherStore } from "@/stores/together";
 import { toast } from "@/composables/useToast";
+import { openExternal } from "@/utils/url";
 const open = defineModel<boolean>("open", { default: false });
 const room = useTogetherStore();
 const official = computed(() => room.state.mode === "netease" || room.state.mode === "qqmusic");
@@ -27,14 +28,19 @@ const run = async (task: () => Promise<void>): Promise<void> => {
   }
 };
 /** 复制房间邀请码 */
-const copy = async (): Promise<void> => {
+const copy = async (text = room.state.invite): Promise<void> => {
   try {
-    await navigator.clipboard.writeText(room.state.invite);
+    await navigator.clipboard.writeText(text);
     toast.success("邀请码已复制");
   } catch {
     toast.warning("请手动复制邀请码");
   }
 };
+/** 复制完整官方分享文案，QQ 音乐页面需要分享者与歌曲资料 */
+const copyQQ = (): Promise<void> =>
+  copy(
+    `#QQ音乐# 快来跟我一起听《${snapshot.value?.tracks[snapshot.value.index]?.title || "歌曲"}》 ${room.state.appInvite} @QQ音乐`,
+  );
 /** 打开聊天侧栏，让播放器继续可操作 */
 const chat = (): void => {
   room.chatOpen = true;
@@ -93,9 +99,17 @@ const chat = (): void => {
         </p>
       </div>
       <div class="w-full grid gap-3" :class="official ? 'grid-cols-1' : 'grid-cols-2'">
-        <SButton variant="secondary" @click="copy">
+        <SButton variant="secondary" @click="copy()">
           <template #icon><IconLucideLink /></template>
-          邀请听友
+          {{ room.state.mode === "qqmusic" ? "复制 SPlayer 邀请" : "邀请听友" }}
+        </SButton>
+        <SButton
+          v-if="room.state.mode === 'qqmusic'"
+          variant="secondary"
+          :disabled="!room.state.appInvite"
+          @click="copyQQ"
+        >
+          复制 QQ 音乐邀请
         </SButton>
         <SButton v-if="!official" variant="secondary" @click="chat">
           <template #icon><IconLucideMessageCircle /></template>
@@ -107,6 +121,24 @@ const chat = (): void => {
           />
         </SButton>
       </div>
+      <p
+        v-if="room.state.mode === 'qqmusic'"
+        class="w-full text-xs text-on-surface-variant leading-relaxed"
+      >
+        {{
+          room.state.appInvite
+            ? "电脑版：在安装了官方 QQ 音乐的电脑上打开邀请网页，点击「立即加入」，并允许浏览器唤起 QQ 音乐。仅复制到剪贴板不会自动入房"
+            : "QQ 音乐 App 邀请需先在房间中选择一首 QQ 歌曲；SPlayer 间可以直接复制邀请加入"
+        }}
+      </p>
+      <a
+        v-if="room.state.mode === 'qqmusic' && room.state.appInvite"
+        :href="room.state.appInvite"
+        class="text-xs text-primary underline underline-offset-4"
+        @click.prevent="openExternal(room.state.appInvite)"
+      >
+        在浏览器打开 QQ 音乐邀请
+      </a>
       <div
         class="flex w-full items-center justify-between border-t border-t-solid border-t-on-surface/8 pt-3 text-xs text-on-surface-variant"
       >
@@ -147,7 +179,8 @@ const chat = (): void => {
       <SDivider />
       <SInput v-model="address" placeholder="可选：这台电脑的 Tailscale / 局域网 IP" />
       <p class="text-xs text-on-surface-variant">
-        已连接 Tailscale 时会优先使用其地址。异地双方需能通过 VPN 或房间服务互相连接。
+        留空会优先使用 Tailscale 地址；手动填写只需本机 IPv4，不含协议或端口。异地双方需通过 VPN
+        或房间服务互相连接。
       </p>
       <SButton
         variant="secondary"

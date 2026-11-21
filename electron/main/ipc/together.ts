@@ -25,6 +25,7 @@ export const registerTogetherIpc = (): void => {
   let reconnect: ReturnType<typeof setTimeout> | null = null;
   let attempts = 0;
   let generation = 0;
+  let diagnosticAt = 0;
   let state: TogetherStatus = {
     connection: "idle",
     invite: "",
@@ -46,8 +47,13 @@ export const registerTogetherIpc = (): void => {
     generation++;
     if (reconnect) clearTimeout(reconnect);
     reconnect = null;
-    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "leave" }));
-    socket?.terminate();
+    const previousSocket = socket;
+    if (previousSocket?.readyState === WebSocket.OPEN) {
+      const closing = setTimeout(() => previousSocket.terminate(), 5000);
+      closing.unref();
+      previousSocket.once("close", () => clearTimeout(closing));
+      previousSocket.send(JSON.stringify({ type: "leave" }), () => previousSocket.close(1000));
+    } else previousSocket?.terminate();
     socket = null;
     server?.close();
     server = null;
@@ -82,7 +88,7 @@ export const registerTogetherIpc = (): void => {
     /** 建立当前代次的 WebSocket */
     const open = (): void => {
       if (epoch !== generation) return;
-      const ws = new WebSocket(url, { maxPayload: TOGETHER_MAX_PAYLOAD, handshakeTimeout: 8000 });
+      const ws = new WebSocket(url, { maxPayload: TOGETHER_MAX_PAYLOAD, handshakeTimeout: 20000 });
       socket = ws;
       ws.on("open", () =>
         ws.send(
@@ -90,17 +96,23 @@ export const registerTogetherIpc = (): void => {
             type: "join",
             secret: decoded.secret,
             id,
+            compact: true,
             avatar: cleanAvatar(avatar),
             name: name.slice(0, 40) || "听友",
           }),
         ),
       );
       ws.on("message", (data) => {
-        if (epoch !== generation) return;
+        if (epoch !== generation || socket !== ws) return;
         try {
           const msg = JSON.parse(data.toString());
           if (msg.type === "state") {
             const v = msg.state;
+            if (msg.compact === true) {
+              if (v.tracks === undefined && v.queueRevision === state.snapshot?.queueRevision)
+                v.tracks = state.snapshot!.tracks;
+              if (v.chat === undefined && state.snapshot) v.chat = state.snapshot.chat;
+            }
             if (
               !v ||
               !Number.isSafeInteger(v.revision) ||
@@ -165,6 +177,12 @@ export const registerTogetherIpc = (): void => {
                 }),
               ),
             };
+            if (state.connection !== "connected")
+              coreLog.info("[together] 自建房连接成功", {
+                hosting: state.hosting,
+                tracks: tracks.length,
+                members: msg.state.members.length,
+              });
             state = { ...state, connection: "connected", snapshot: msg.state, error: "" };
             attempts = 0;
           } else if (msg.type === "error") state.error = String(msg.error).slice(0, 200);
@@ -175,12 +193,18 @@ export const registerTogetherIpc = (): void => {
         }
       });
       ws.on("error", (error) => {
-        if (epoch !== generation) return;
+        if (epoch !== generation || socket !== ws) return;
         state.error = togetherConnectionError(error, url);
         publish();
       });
       ws.on("close", (code) => {
-        if (epoch !== generation) return;
+        if (epoch !== generation || socket !== ws) return;
+        coreLog.warn("[together] 自建房连接中断", {
+          code,
+          attempts,
+          hosting: state.hosting,
+          hadSnapshot: !!state.snapshot,
+        });
         state.connection = "reconnecting";
         publish();
         if (code === 1008 || ++attempts > 20) {
@@ -386,6 +410,27 @@ export const registerTogetherIpc = (): void => {
     }
   });
   ipcMain.handle("together:send", (_event, message: unknown) => {
+    const diagnostic = message as { type?: string; event?: string; error?: string } | null;
+    if (diagnostic?.type === "diagnostic") {
+      if (Date.now() - diagnosticAt < 2000) return;
+      diagnosticAt = Date.now();
+      if (!["playback-error", "playback-recovered"].includes(diagnostic.event || "")) return;
+      const error = String(diagnostic.error || "")
+        .replace(/https?:\/\/\S+/gi, "[URL]")
+        .replace(/(?:cookie|authst|vkey|music_key)\s*[:=]\s*\S+/gi, "[凭据已隐藏]")
+        .slice(0, 300);
+      const snapshot = state.snapshot;
+      coreLog.info("[together] 本机播放诊断", {
+        event: diagnostic.event,
+        mode: state.mode || "self",
+        connection: state.connection,
+        revision: snapshot?.revision,
+        index: snapshot?.index,
+        tracks: snapshot?.tracks.length,
+        error,
+      });
+      return;
+    }
     if (official) return official.send(message);
     if (socket?.readyState !== WebSocket.OPEN) throw new Error("房间连接中，请稍候");
     const text = JSON.stringify(message);

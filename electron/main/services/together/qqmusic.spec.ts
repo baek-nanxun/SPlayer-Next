@@ -427,3 +427,20 @@ it("单曲循环在自然结束时重播当前曲，手动切歌仍可换歌", a
   await client.send({ type: "command", command: { type: "next" } });
   expect(frames.at(-1)!.snapshot!.index).toBe(1);
 });
+
+it("QQ App邀请包含真实分享身份与当前歌曲，空房只提供SPlayer链接", async () => {
+  const { api } = setup();
+  const frames: TogetherStatus[] = [];
+  const client = new QQMusicTogether(api, (s) => frames.push(s), ["123456", "encrypted-test"]);
+  instances.push(client);
+  await client.host();
+  const url = new URL(frames.at(-1)!.appInvite!);
+  expect(url.searchParams.get("share_encrypt_uin")).toBe("encrypted-test");
+  expect(url.searchParams.get("songid")).toBe("11");
+  await client.send({ type: "command", command: { type: "next" } });
+  expect(new URL(frames.at(-1)!.appInvite!).searchParams.get("songid")).toBe("22");
+  const empty = setup();
+  empty.empty();
+  await empty.client.host();
+  expect(empty.frames.at(-1)!.appInvite).toBeUndefined();
+});

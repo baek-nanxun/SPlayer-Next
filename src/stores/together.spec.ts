@@ -374,3 +374,43 @@ it("两种官方房间的模式指令可发送，回读模式不重载当前歌�
     expect(mocks.apply).not.toHaveBeenCalled();
   }
 });
+
+it("自建房短暂断线保留健康本机播放，恢复连接后再确认准备状态", async () => {
+  useTogetherStore();
+  await flushPromises();
+  const active = state(1, 2);
+  active.mode = "self";
+  mocks.receive!(active);
+  await flushPromises();
+  mocks.localStatus.state = "playing";
+  mocks.invalidate.mockClear();
+  mocks.apply.mockClear();
+  mocks.receive!({ ...active, connection: "reconnecting" });
+  await flushPromises();
+  expect(mocks.localStatus.state).toBe("playing");
+  expect(mocks.invalidate).not.toHaveBeenCalled();
+  expect(mocks.apply).not.toHaveBeenCalled();
+  mocks.receive!(active);
+  await flushPromises();
+  expect(mocks.send).toHaveBeenCalledWith({ type: "ready", revision: 3 });
+});
+it("播放失败会记录限频诊断，恢复后清除错误并上报恢复", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  const room = useTogetherStore();
+  await flushPromises();
+  mocks.apply.mockRejectedValueOnce(Error("网络连接超时"));
+  const active = state(1, 2);
+  mocks.receive!(active);
+  await flushPromises();
+  expect(room.playbackError).toBe("网络连接超时");
+  expect(mocks.send).toHaveBeenCalledWith({
+    type: "diagnostic",
+    event: "playback-error",
+    error: "网络连接超时",
+  });
+  vi.setSystemTime(Date.now() + 6000);
+  mocks.receive!(active);
+  await flushPromises();
+  expect(room.playbackError).toBe("");
+  expect(mocks.send).toHaveBeenCalledWith({ type: "diagnostic", event: "playback-recovered" });
+});

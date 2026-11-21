@@ -408,23 +408,49 @@ export const startTogetherServer = async (port = 0, host = "0.0.0.0") => {
     maxPayload: TOGETHER_MAX_PAYLOAD,
     perMessageDeflate: false,
   });
-  const peers = new Map<WebSocket, { id: string; alive: boolean; messages: number }>();
+  const peers = new Map<
+    WebSocket,
+    {
+      id: string;
+      lastSeen: number;
+      messages: number;
+      compact: boolean;
+      queueRevision: number;
+      chatId: number;
+    }
+  >();
   let chatId = 0;
   /** 向已认证成员广播共享快照 */
   const publish = (): void => {
-    const frame = JSON.stringify({ type: "state", state: room.snapshot() });
-    for (const ws of peers.keys()) if (ws.readyState === WebSocket.OPEN) ws.send(frame);
+    const state = room.snapshot();
+    for (const [ws, peer] of peers) {
+      if (ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 256 * 1024) continue;
+      ws.send(
+        JSON.stringify({
+          type: "state",
+          compact: peer.compact,
+          state: {
+            ...state,
+            tracks:
+              peer.compact && peer.queueRevision === state.queueRevision ? undefined : state.tracks,
+            chat: peer.compact && peer.chatId === chatId ? undefined : state.chat,
+          },
+        }),
+      );
+      peer.queueRevision = state.queueRevision;
+      peer.chatId = chatId;
+    }
   };
   wss.on("connection", (ws) => {
     if (wss.clients.size > 10) {
       ws.close(1008);
       return;
     }
-    const authTimer = setTimeout(() => ws.close(1008, "登录超时"), 5000);
+    const authTimer = setTimeout(() => ws.close(1008, "登录超时"), 15000);
     ws.on("error", () => {});
     ws.on("pong", () => {
       const p = peers.get(ws);
-      if (p) p.alive = true;
+      if (p) p.lastSeen = Date.now();
     });
     ws.on("message", (raw) => {
       try {
@@ -439,15 +465,27 @@ export const startTogetherServer = async (port = 0, host = "0.0.0.0") => {
             typeof msg.name !== "string"
           )
             throw new Error("邀请码无效");
-          if ([...peers.values()].some((x) => x.id === msg.id)) throw new Error("成员已连接");
+          for (const [previous, member] of peers) {
+            if (member.id !== msg.id) continue;
+            peers.delete(previous);
+            previous.terminate();
+          }
           room.join(msg.id, msg.name.slice(0, 40) || "听友", msg.avatar);
           clearTimeout(authTimer);
-          p = { id: msg.id, alive: true, messages: 0 };
+          p = {
+            id: msg.id,
+            lastSeen: Date.now(),
+            messages: 0,
+            compact: msg.compact === true,
+            queueRevision: -1,
+            chatId: -1,
+          };
           peers.set(ws, p);
           publish();
           return;
         }
         if (++p.messages > 40) throw new Error("操作过于频繁");
+        p.lastSeen = Date.now();
         if (msg.type === "command") room.command(p.id, msg.command);
         else if (msg.type === "ready") room.ready(p.id, msg.revision);
         else if (msg.type === "profile") {
@@ -510,11 +548,10 @@ export const startTogetherServer = async (port = 0, host = "0.0.0.0") => {
   }, 250);
   const heartbeat = setInterval(() => {
     for (const [ws, p] of peers) {
-      if (!p.alive) {
+      if (Date.now() - p.lastSeen >= 30000) {
         ws.terminate();
         continue;
       }
-      p.alive = false;
       p.messages = 0;
       ws.ping();
     }

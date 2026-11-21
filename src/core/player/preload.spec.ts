@@ -318,6 +318,55 @@ describe("切歌消费真实预载", () => {
       expect.objectContaining({ preparedId: undefined }),
     ]);
   });
+  it("新歌取源被取消后不能把旧音源当成新歌继续播放", async () => {
+    const { playFrom, invalidatePlaybackOperation, applyTogetherSnapshot } =
+      await import("./index");
+    mocks.consume.mockReturnValue(null);
+    let finish!: (value: unknown) => void;
+    mocks.resolve.mockReset().mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          finish = done;
+        }),
+    );
+    mocks.resolve.mockResolvedValue({
+      source: "https://music/new",
+      provider: "official",
+      fromCache: false,
+    });
+    mocks.status.currentSource = "old-audio";
+    const starting = playFrom([mocks.track as Track]);
+    await Promise.resolve();
+    const sourceDuring = mocks.status.currentSource;
+    invalidatePlaybackOperation();
+    finish({ source: "https://music/stale", provider: "official", fromCache: false });
+    await starting;
+    Object.assign(window.api.player, {
+      syncPlayMode: vi.fn(),
+      seek: vi.fn().mockResolvedValue({ success: true }),
+      play: vi.fn().mockResolvedValue({ success: true }),
+    });
+    await applyTogetherSnapshot(
+      {
+        revision: 2,
+        queueRevision: 1,
+        serverTime: 0,
+        position: 100,
+        playing: true,
+        desiredPlaying: true,
+        index: 0,
+        tracks: [mocks.track as Track],
+        members: [],
+        elapsedMs: 0,
+        counting: false,
+        chat: [],
+      },
+      () => true,
+    );
+    expect(sourceDuring).toBeNull();
+    expect(mocks.load).toHaveBeenCalledExactlyOnceWith("https://music/new", expect.any(Object));
+    expect(mocks.status.currentSource).toBe("https://music/new");
+  });
 });
 
 describe("交叉过渡的队列交接", () => {
