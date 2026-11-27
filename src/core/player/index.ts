@@ -1621,6 +1621,22 @@ export const applyTogetherQueue = (snapshot: TogetherSnapshot): void => {
   useStatusStore().playIndex = snapshot.tracks.length ? snapshot.index : -1;
 };
 
+/**
+ * 归一一起听所需的本地播放模式与倍速
+ * @returns 倍速与模式同步完成
+ */
+export const normalizeTogetherPlayback = async (): Promise<void> => {
+  const status = useStatusStore();
+  status.fmMode = false;
+  status.heartMode = false;
+  if (status.speed !== 1) {
+    await window.api.player.setSpeed(1);
+    status.speed = 1;
+    playback.setSpeed(1);
+  }
+  invalidateNextTrackPreload();
+};
+
 /** 应用房间权威状态，直接驱动引擎以避免再次广播
  * @param snapshot - 房间快照
  * @param current - 当前任务是否仍有效
@@ -1642,14 +1658,8 @@ export const applyTogetherSnapshot = async (
     }
     return;
   }
-  status.fmMode = false;
-  status.heartMode = false;
-  if (status.speed !== 1) {
-    await window.api.player.setSpeed(1);
-    status.speed = 1;
-    playback.setSpeed(1);
-  }
-  invalidateNextTrackPreload();
+  await normalizeTogetherPlayback();
+  if (!current()) return;
   applyTogetherQueue(snapshot);
   const old = useMediaStore().track;
   if (

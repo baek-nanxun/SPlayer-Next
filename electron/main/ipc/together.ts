@@ -373,13 +373,18 @@ export const registerTogetherIpc = (): void => {
     }
     throw new Error("网易云分享链接跳转过多");
   };
-  ipcMain.handle("together:hostNetease", async () => {
+  ipcMain.handle("together:hostNetease", async (_event, initial?: TogetherInitialState) => {
     assertIdle();
+    const cleaned = initial?.tracks?.length
+      ? { ...initial, tracks: cleanTracks(initial.tracks) }
+      : undefined;
+    if (cleaned?.tracks.some((t) => t.source !== "netease"))
+      throw new Error("网易云官方房间仅支持网易云歌曲");
     leave();
     const client = officialClient();
     official = client;
     try {
-      await client.start();
+      await (cleaned ? client.start(undefined, cleaned) : client.start());
     } catch (error) {
       if (official === client) leave();
       throw error;

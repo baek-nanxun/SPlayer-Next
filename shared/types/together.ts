@@ -57,9 +57,11 @@ export interface TogetherInitialState {
   repeatMode?: RepeatMode;
 }
 
-/** 校验曲目是否满足一起听在线共享条件
+/**
+ * 校验曲目是否满足一起听在线共享条件
  * @param track - 待检查的曲目
  * @param mode - 当前房间模式
+ * @returns 曲目是否可在目标房间中共享
  */
 export const isShareableTogetherTrack = (
   track: Partial<TogetherTrack> | null | undefined,

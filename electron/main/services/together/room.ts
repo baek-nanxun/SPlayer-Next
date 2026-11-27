@@ -422,10 +422,12 @@ export class TogetherRoom {
   }
 }
 
-/** 启动只容纳一个双人房间的服务
+/**
+ * 启动只容纳一个双人房间的服务
  * @param port - 监听端口，0 表示由系统分配
  * @param host - 监听地址
  * @param initial - 可选初始播放队列与进度
+ * @returns 房间服务端口、密钥、实例与关闭方法
  */
 export const startTogetherServer = async (
   port = 0,

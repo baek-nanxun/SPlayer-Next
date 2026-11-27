@@ -1,4 +1,5 @@
 import { useAccountStore } from "./account";
+import { useMediaStore } from "./media";
 import { useStatusStore } from "./status";
 import { queue as playerQueue } from "./queue";
 import { setTogetherControl } from "@/services/togetherBridge";
@@ -6,6 +7,7 @@ import {
   applyTogetherQueue,
   applyTogetherSnapshot,
   invalidatePlaybackOperation,
+  normalizeTogetherPlayback,
 } from "@/core/player";
 import { toast } from "@/composables/useToast";
 import {
@@ -20,8 +22,10 @@ import type {
   TogetherTrack,
 } from "@shared/types/together";
 
-/** 只发送必要歌曲资料，完整歌单也不包含本地路径或大封面
+/**
+ * 只发送必要歌曲资料，完整歌单也不包含本地路径或大封面
  * @param track - 本地歌曲资料
+ * @returns 裁剪后的安全曲目资料
  */
 const compactTrack = (track: TogetherTrack): TogetherTrack => {
   const images = [track.cover, track.album?.cover].map((value) => {
@@ -95,7 +99,8 @@ export const useTogetherStore = defineStore("together", () => {
         "0",
       )}:${Math.floor(sec / 60) % 60 < 10 ? "0" : ""}${Math.floor(sec / 60) % 60}:${(sec % 60).toString().padStart(2, "0")}`;
   });
-  /** 提示不可共享曲目的原因
+  /**
+   * 提示不可共享曲目的原因
    * @param sample - 被拒绝的曲目列表
    */
   const warnInvalidTracks = (sample: ReadonlyArray<{ source?: string } | undefined>): void => {
@@ -113,10 +118,12 @@ export const useTogetherStore = defineStore("together", () => {
     }
     toast.warning("所选歌曲缺少有效在线信息，无法同步到一起听");
   };
-  /** 围绕目标曲目裁剪有界在线队列
+  /**
+   * 围绕目标曲目裁剪有界在线队列
    * @param list - 已过滤的在线曲目
    * @param index - 目标曲目索引
    * @param limit - 队列上限
+   * @returns 裁剪后的在线曲目窗口与目标索引
    */
   const sliceAround = (
     list: TogetherTrack[],
@@ -128,9 +135,11 @@ export const useTogetherStore = defineStore("together", () => {
     const start = Math.max(0, Math.min(safeIndex - Math.floor(limit / 2), list.length - limit));
     return { tracks: list.slice(start, start + limit), index: safeIndex - start };
   };
-  /** 提取本机当前可共享的在线播放状态，供建房无缝继承
+  /**
+   * 提取本机实际已加载曲目与可共享在线队列，供建房无缝继承
    * @param mode - 目标房间模式
    * @param limit - 最大曲目数
+   * @returns 房间初始同步状态，无可共享曲目时返回 undefined
    */
   const collectInitialState = async (
     mode?: TogetherStatus["mode"],
@@ -138,14 +147,18 @@ export const useTogetherStore = defineStore("together", () => {
   ): Promise<TogetherInitialState | undefined> => {
     const status = useStatusStore() as ReturnType<typeof useStatusStore> & {
       position?: number;
+      fmMode?: boolean;
       shuffleMode?: "off" | "on";
       repeatMode?: "list" | "one";
     };
-    const shareable = playerQueue.value.filter((t) => isShareableTogetherTrack(t, mode));
-    const current = status.currentTrack;
-    if (isShareableTogetherTrack(current, mode)) {
-      const found = shareable.findIndex((t) => t.id === current.id && t.source === current.source);
-      const base = found >= 0 ? shareable : [current];
+    const loaded = useMediaStore().track;
+    const shareable = status.fmMode
+      ? []
+      : playerQueue.value.filter((t) => isShareableTogetherTrack(t, mode));
+    if (loaded) {
+      if (!isShareableTogetherTrack(loaded, mode)) return undefined;
+      const found = shareable.findIndex((t) => t.id === loaded.id && t.source === loaded.source);
+      const base = found >= 0 ? shareable : [loaded];
       const sliced = sliceAround(base, found >= 0 ? found : 0, limit);
       const live = await window.api.player?.getStatus?.().catch(() => null);
       const rawPos = live?.success && live.data ? live.data.position : (status.position ?? 0);
@@ -157,6 +170,23 @@ export const useTogetherStore = defineStore("together", () => {
         index: sliced.index,
         position: Math.min(target.duration, Math.max(0, Math.round(rawPos))),
         playing,
+        shuffleMode: status.shuffleMode === "on" ? "on" : "off",
+        repeatMode: status.repeatMode === "one" ? "one" : "list",
+      };
+    }
+    const fallback = !status.fmMode ? status.currentTrack : null;
+    if (isShareableTogetherTrack(fallback, mode)) {
+      const found = shareable.findIndex(
+        (t) => t.id === fallback.id && t.source === fallback.source,
+      );
+      const base = found >= 0 ? shareable : [fallback];
+      const sliced = sliceAround(base, found >= 0 ? found : 0, limit);
+      const target = sliced.tracks[sliced.index];
+      return {
+        tracks: sliced.tracks.map(compactTrack),
+        index: sliced.index,
+        position: Math.min(target.duration, Math.max(0, Math.round(status.position ?? 0))),
+        playing: false,
         shuffleMode: status.shuffleMode === "on" ? "on" : "off",
         repeatMode: status.repeatMode === "one" ? "one" : "list",
       };
@@ -188,22 +218,22 @@ export const useTogetherStore = defineStore("together", () => {
       (command.type === "play" || command.type === "next" || command.type === "prev") &&
       !state.value.snapshot?.tracks.length
     ) {
-      const status = useStatusStore();
-      const shareable = playerQueue.value.filter((t) =>
-        isShareableTogetherTrack(t, state.value.mode),
-      );
-      const current = status.currentTrack;
-      const found = current
-        ? shareable.findIndex((t) => t.id === current.id && t.source === current.source)
+      const status = useStatusStore() as ReturnType<typeof useStatusStore> & { fmMode?: boolean };
+      const active = useMediaStore().track ?? (!status.fmMode ? status.currentTrack : null);
+      const shareable = status.fmMode
+        ? []
+        : playerQueue.value.filter((t) => isShareableTogetherTrack(t, state.value.mode));
+      const found = active
+        ? shareable.findIndex((t) => t.id === active.id && t.source === active.source)
         : -1;
       const list =
         found >= 0
           ? shareable
-          : isShareableTogetherTrack(current, state.value.mode)
-            ? [current]
+          : isShareableTogetherTrack(active, state.value.mode)
+            ? [active]
             : shareable;
       if (!list.length) {
-        if (current) warnInvalidTracks([current]);
+        if (active) warnInvalidTracks([active]);
         else toast.warning("请先选择一个在线歌单或歌曲，开始一起听");
         return;
       }
@@ -316,14 +346,18 @@ export const useTogetherStore = defineStore("together", () => {
           applyingRevision = snapshot.revision;
           const position = snapshot.position + (snapshot.playing ? Date.now() - job.received : 0);
           const target = snapshot.tracks[snapshot.index];
-          const localStatus = useStatusStore();
+          const localStatus = useStatusStore() as ReturnType<typeof useStatusStore> & {
+            currentSource?: string | null;
+          };
+          const loaded = useMediaStore().track;
           let seamlessHostSync = false;
           if (
             applied === "" &&
             job.state.hosting &&
             target &&
-            localStatus.currentTrack?.id === target.id &&
-            localStatus.currentTrack?.source === target.source &&
+            loaded?.id === target.id &&
+            loaded?.source === target.source &&
+            Boolean(localStatus.currentSource) &&
             (localStatus.state === "playing") === snapshot.playing
           ) {
             const live = await window.api.player?.getStatus?.().catch(() => null);
@@ -332,8 +366,10 @@ export const useTogetherStore = defineStore("together", () => {
               live?.success &&
               live.data &&
               (live.data.state === "playing") === snapshot.playing &&
-              Math.abs(live.data.position - position) < 1500
+              Math.abs(live.data.position - position) < 300
             ) {
+              await normalizeTogetherPlayback();
+              if (!current()) continue;
               seamlessHostSync = true;
             }
           }
@@ -489,8 +525,10 @@ export const useTogetherStore = defineStore("together", () => {
     clearInterval(timer);
     setTogetherControl(null);
   });
-  /** 创建双人自建房间，自动继承当前在线歌曲与播放状态
+  /**
+   * 创建双人自建房间，自动继承当前在线歌曲与播放状态
    * @param address - 可选 VPN 或局域网 IP
+   * @returns 生成的房间邀请码
    */
   const host = async (address?: string): Promise<string> => {
     playbackError.value = "";
@@ -505,14 +543,16 @@ export const useTogetherStore = defineStore("together", () => {
     }
     return invite;
   };
-  /** 创建 QQ 音乐官方一起听房间，若正在听 QQ 音乐则直接携带当前歌单与状态 */
+  /**
+   * 创建 QQ 音乐官方一起听房间，若正在听 QQ 音乐则直接携带当前歌单与状态
+   * @returns 房间创建完成
+   */
   const hostQQMusic = async (): Promise<void> => {
     playbackError.value = "";
-    const status = useStatusStore();
+    const status = useStatusStore() as ReturnType<typeof useStatusStore> & { fmMode?: boolean };
+    const active = useMediaStore().track ?? (!status.fmMode ? status.currentTrack : null);
     const initial =
-      status.currentTrack?.source === "qqmusic"
-        ? await collectInitialState("qqmusic", 1000)
-        : undefined;
+      active?.source === "qqmusic" ? await collectInitialState("qqmusic", 1000) : undefined;
     if (initial?.tracks.length) {
       try {
         await window.api.together.hostQQMusic(
@@ -528,35 +568,23 @@ export const useTogetherStore = defineStore("together", () => {
     }
     await window.api.together.hostQQMusic([], 0, 0);
   };
-  /** 创建网易云官方一起听房间，若正在听网易云则建房后自动同步当前队列与进度 */
+  /**
+   * 创建网易云官方一起听房间，建房阶段原子写入初始队列、进度与暂停或播放态
+   * @returns 房间创建完成
+   */
   const hostNetease = async (): Promise<void> => {
     playbackError.value = "";
-    const status = useStatusStore();
+    const status = useStatusStore() as ReturnType<typeof useStatusStore> & { fmMode?: boolean };
+    const active = useMediaStore().track ?? (!status.fmMode ? status.currentTrack : null);
     const initial =
-      status.currentTrack?.source === "netease"
+      active?.source === "netease"
         ? await collectInitialState("netease", TOGETHER_MAX_TRACKS)
         : undefined;
-    await window.api.together.hostNetease();
-    if (
-      initial?.tracks.length &&
-      state.value.connection === "connected" &&
-      !state.value.snapshot?.tracks.length
-    ) {
-      await window.api.together.send({
-        type: "command",
-        command: { type: "queue", tracks: initial.tracks, index: initial.index },
-      });
-      if ((initial.position ?? 0) > 1500) {
-        await window.api.together
-          .send({ type: "command", command: { type: "seek", position: initial.position! } })
-          .catch(() => {});
-      }
-      if (!initial.playing) {
-        await window.api.together
-          .send({ type: "command", command: { type: "pause" } })
-          .catch(() => {});
-      }
+    if (initial?.tracks.length) {
+      await window.api.together.hostNetease(initial);
+      return;
     }
+    await window.api.together.hostNetease();
   };
   /** 加入邀请码指定的房间
    * @param invite - 房间邀请码

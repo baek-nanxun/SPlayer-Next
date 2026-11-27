@@ -44,7 +44,9 @@ declare global {
           position: number,
           playing?: boolean,
         ) => Promise<void>;
-        hostNetease: () => Promise<void>;
+        hostNetease: (
+          initial?: import("@shared/types/together").TogetherInitialState,
+        ) => Promise<void>;
         status: () => Promise<import("@shared/types/together").TogetherStatus>;
         host: (
           name: string,

@@ -64,7 +64,8 @@ const api = {
       playing?: boolean,
     ): Promise<void> =>
       ipcRenderer.invoke("together:hostQQMusic", tracks, index, position, playing),
-    hostNetease: (): Promise<void> => ipcRenderer.invoke("together:hostNetease"),
+    hostNetease: (initial?: import("@shared/types/together").TogetherInitialState): Promise<void> =>
+      ipcRenderer.invoke("together:hostNetease", initial),
     status: (): Promise<import("@shared/types/together").TogetherStatus> =>
       ipcRenderer.invoke("together:status"),
     host: (

@@ -10,7 +10,11 @@ const address = ref("");
 const busy = ref(false);
 const active = computed(() => room.state.connection !== "idle");
 const snapshot = computed(() => room.state.snapshot);
-/** 静默写入剪贴板并返回是否成功 */
+/**
+ * 静默写入剪贴板并返回是否成功
+ * @param text - 待写入剪贴板的文本
+ * @returns 是否成功写入剪贴板
+ */
 const writeClipboard = async (text: string): Promise<boolean> => {
   if (!text) return false;
   try {
@@ -20,7 +24,10 @@ const writeClipboard = async (text: string): Promise<boolean> => {
     return false;
   }
 };
-/** 构造 QQ 官方分享文案 */
+/**
+ * 构造 QQ 官方分享文案
+ * @returns 包含歌名与房间链接的完整官方分享文案
+ */
 const formatQQInvite = (): string =>
   `#QQ音乐# 快来跟我一起听《${snapshot.value?.tracks[snapshot.value.index]?.title || "歌曲"}》 ${room.state.appInvite} @QQ音乐`;
 /** 创建自建房间并自动复制邀请码、释放模态遮罩 */
@@ -33,7 +40,7 @@ const startSelfHost = async (): Promise<void> => {
     toast.warning("房间已创建，请手动复制邀请码");
   }
 };
-/** 创建可与网易云官方客户端互通的房间 */
+/** 创建可与网易云官方客户端互通的房间并自动复制邀请链接 */
 const startNetease = async (): Promise<void> => {
   await (room.hostNetease ? room.hostNetease() : window.api.together.hostNetease());
   if (await writeClipboard(room.state.invite)) {
@@ -43,7 +50,7 @@ const startNetease = async (): Promise<void> => {
     toast.warning("房间已创建，请手动复制邀请链接");
   }
 };
-/** 创建 QQ 音乐官方一起听房间 */
+/** 创建 QQ 音乐官方一起听房间并复制对应邀请 */
 const startQQMusic = async (): Promise<void> => {
   await (room.hostQQMusic ? room.hostQQMusic() : window.api.together.hostQQMusic([], 0, 0));
   const text = room.state.appInvite ? formatQQInvite() : room.state.invite;
@@ -78,7 +85,10 @@ const run = async (task: () => Promise<void>): Promise<void> => {
     busy.value = false;
   }
 };
-/** 复制房间邀请码 */
+/**
+ * 复制房间邀请码并弹出结果提示
+ * @param text - 待复制的邀请码或分享文案
+ */
 const copy = async (text = room.state.invite): Promise<void> => {
   if (await writeClipboard(text)) {
     toast.success("邀请码已复制");

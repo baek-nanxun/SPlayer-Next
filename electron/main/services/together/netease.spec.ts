@@ -468,3 +468,39 @@ it("网易云退房超时仍然停止本地同步，不重复提交退出", asyn
   expect(api).toHaveBeenCalledTimes(count);
   expect(frames.at(-1)).toMatchObject({ connection: "idle", snapshot: null });
 });
+it("暂停状态下创建网易云官方房间原子同步进度与暂停态，不产生中间播放快照", async () => {
+  const { client, state, frames } = setup();
+  state.inRoom = false;
+  state.ids = [];
+  state.command = {
+    targetSongId: "",
+    progress: 0,
+    playStatus: "PAUSE",
+    serverSeq: Date.now(),
+    clientSeq: 0,
+  };
+  await client.start(undefined, {
+    tracks: [
+      { id: "11", source: "netease", title: "第一首", artists: [], duration: 300000 },
+      { id: "22", source: "netease", title: "第二首", artists: [], duration: 300000 },
+    ],
+    index: 1,
+    position: 45000,
+    playing: false,
+    shuffleMode: "on",
+    repeatMode: "list",
+  });
+  expect(frames.some((f) => f.snapshot?.playing === true)).toBe(false);
+  expect(frames.at(-1)).toMatchObject({
+    connection: "connected",
+    hosting: true,
+    snapshot: {
+      index: 1,
+      position: 45000,
+      playing: false,
+      desiredPlaying: false,
+      shuffleMode: "on",
+      tracks: [{ id: "11" }, { id: "22" }],
+    },
+  });
+});
