@@ -10,6 +10,20 @@ const address = ref("");
 const busy = ref(false);
 const active = computed(() => room.state.connection !== "idle");
 const snapshot = computed(() => room.state.snapshot);
+const playbackStatus = computed(() => {
+  if (room.state.connection !== "connected") return "正在重新连接";
+  if (room.playbackError) return "本机无法播放，暂不计时";
+  const current = snapshot.value;
+  if (current?.counting) return "音乐正在你们之间流动";
+  const online = current?.members.filter((member) => member.online) ?? [];
+  if (online.length < 2) return "等待听友加入";
+  if (!current?.tracks.length) return "已连接，请先选择歌曲";
+  if (!current.desiredPlaying) return "播放已暂停，暂不计时";
+  const waiting = online.filter((member) => !member.ready).map((member) => member.name);
+  return waiting.length
+    ? `等待 ${waiting.join("、")} 准备播放，暂不计时`
+    : "等待播放状态确认，暂不计时";
+});
 /**
  * 静默写入剪贴板并返回是否成功
  * @param text - 待写入剪贴板的文本
@@ -133,18 +147,11 @@ const chat = (): void => {
               class="size-1.5 rounded-full"
               :class="snapshot?.counting ? 'bg-emerald-500' : 'bg-on-surface-variant/30'"
             />
-            {{
-              room.state.connection !== "connected"
-                ? "正在重新连接"
-                : snapshot?.counting
-                  ? "音乐正在你们之间流动"
-                  : snapshot?.members.filter((m) => m.online).length === 2
-                    ? snapshot?.desiredPlaying
-                      ? "正在缓冲，恢复后继续计时"
-                      : "已连接，随时开始一起听"
-                    : "等待听友加入"
-            }}
+            {{ playbackStatus }}
           </div>
+          <p v-if="room.playbackError" role="alert" class="mt-3 text-sm text-red-500">
+            {{ room.playbackError }}
+          </p>
         </div>
       </div>
       <div class="w-full text-center">
@@ -239,8 +246,8 @@ const chat = (): void => {
       </p>
       <SButton variant="secondary" :disabled="busy" @click="run(startSelfHost)">创建一起听</SButton>
     </div>
-    <p v-if="room.state.error || room.playbackError" class="mt-3 text-sm text-red-500">
-      {{ room.playbackError || room.state.error }}
+    <p v-if="room.state.error" class="mt-3 text-sm text-red-500">
+      {{ room.state.error }}
     </p>
   </SDialog>
 </template>

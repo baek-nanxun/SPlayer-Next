@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
       snapshot: {
         index: 0,
         tracks: [{ title: "测试歌曲" }],
-        members: [],
+        members: [] as Array<{ id: string; name: string; online: boolean; ready: boolean }>,
         desiredPlaying: false,
         counting: false,
       },
@@ -36,10 +36,54 @@ const globals = {
 beforeEach(() => {
   mocks.write.mockReset().mockResolvedValue(undefined);
   mocks.room.state.appInvite = undefined;
+  mocks.room.state.mode = "qqmusic";
+  mocks.room.state.connection = "connected";
+  mocks.room.state.snapshot.members = [];
+  mocks.room.state.snapshot.desiredPlaying = false;
+  mocks.room.state.snapshot.counting = false;
+  mocks.room.playbackError = "";
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
     value: { writeText: mocks.write },
   });
+});
+it("播放失败在计时卡内显示具体原因，不再误标为缓冲", () => {
+  mocks.room.state.snapshot.members = [
+    { id: "a", name: "甲", online: true, ready: false },
+    { id: "b", name: "乙", online: true, ready: true },
+  ];
+  mocks.room.state.snapshot.desiredPlaying = true;
+  mocks.room.playbackError = "该歌曲仅提供试听，请在设置中允许试听播放";
+  const wrapper = mount(TogetherDialog, { props: { open: true }, global: globals });
+  expect(wrapper.text()).toContain("本机无法播放，暂不计时");
+  expect(wrapper.get('[role="alert"]').text()).toBe(mocks.room.playbackError);
+  expect(wrapper.text()).not.toContain("正在缓冲");
+  wrapper.unmount();
+});
+it("等待准备时显示对应听友，已就绪的一方不列入等待名单", () => {
+  mocks.room.state.snapshot.members = [
+    { id: "a", name: "甲", online: true, ready: false },
+    { id: "b", name: "乙", online: true, ready: true },
+  ];
+  mocks.room.state.snapshot.desiredPlaying = true;
+  const wrapper = mount(TogetherDialog, { props: { open: true }, global: globals });
+  expect(wrapper.text()).toContain("等待 甲 准备播放，暂不计时");
+  expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+  wrapper.unmount();
+});
+it("暂停与共同播放分别显示实际状态，不误报等待准备", () => {
+  mocks.room.state.snapshot.members = [
+    { id: "a", name: "甲", online: true, ready: true },
+    { id: "b", name: "乙", online: true, ready: true },
+  ];
+  let wrapper = mount(TogetherDialog, { props: { open: true }, global: globals });
+  expect(wrapper.text()).toContain("播放已暂停，暂不计时");
+  wrapper.unmount();
+  mocks.room.state.snapshot.counting = true;
+  mocks.room.state.snapshot.desiredPlaying = true;
+  wrapper = mount(TogetherDialog, { props: { open: true }, global: globals });
+  expect(wrapper.text()).toContain("音乐正在你们之间流动");
+  wrapper.unmount();
 });
 afterEach(() => vi.restoreAllMocks());
 it("空房可分享给SPlayer，官方邀请未就绪时禁用按钮并解释先选歌", async () => {
