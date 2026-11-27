@@ -414,3 +414,112 @@ it("播放失败会记录限频诊断，恢复后清除错误并上报恢复", a
   expect(room.playbackError).toBe("");
   expect(mocks.send).toHaveBeenCalledWith({ type: "diagnostic", event: "playback-recovered" });
 });
+
+it("正在播放歌曲时创建自建房间，继承当前队列与进度且连接阶段绝不暂停或重拖本机音频", async () => {
+  const room = useTogetherStore();
+  await flushPromises();
+  const pause = vi.spyOn(window.api.player, "pause");
+  mocks.localTracks = [
+    { id: "local1", source: "local" as const, title: "本地曲", artists: [], duration: 120000 },
+    { id: "101", source: "netease" as const, title: "第一首", artists: [], duration: 200000 },
+    { id: "202", source: "qqmusic" as const, title: "正在听", artists: [], duration: 240000 },
+  ];
+  mocks.localStatus.currentTrack = mocks.localTracks[2];
+  mocks.localStatus.state = "playing";
+  mocks.status.mockResolvedValue({ success: true, data: { position: 42300, state: "playing" } });
+  mocks.host.mockResolvedValue("splayer-together:invite");
+
+  await room.host("100.80.1.2");
+  expect(mocks.host).toHaveBeenCalledWith(
+    "听友",
+    "100.80.1.2",
+    "https://example.com/avatar.jpg",
+    expect.objectContaining({
+      index: 1,
+      position: 42300,
+      playing: true,
+      tracks: [
+        expect.objectContaining({ id: "101", source: "netease" }),
+        expect.objectContaining({ id: "202", source: "qqmusic" }),
+      ],
+    }),
+  );
+
+  // 连续收到两次 connecting 状态也不会误判为断线暂停
+  mocks.receive!({
+    connection: "connecting",
+    hosting: true,
+    invite: "",
+    error: "",
+    snapshot: null,
+  });
+  mocks.receive!({
+    connection: "connecting",
+    hosting: true,
+    invite: "splayer-together:invite",
+    error: "",
+    snapshot: null,
+  });
+  expect(pause).not.toHaveBeenCalled();
+  expect(mocks.localStatus.state).toBe("playing");
+
+  // 收到带初始进度的连接快照后，直接确认 ready 而不触发本机重绑与 seek
+  mocks.apply.mockClear();
+  mocks.send.mockClear();
+  mocks.receive!({
+    connection: "connected",
+    hosting: true,
+    invite: "splayer-together:invite",
+    error: "",
+    snapshot: {
+      revision: 1,
+      queueRevision: 1,
+      serverTime: Date.now(),
+      position: 42350,
+      playing: true,
+      desiredPlaying: true,
+      index: 1,
+      tracks: [
+        { id: "101", source: "netease", title: "第一首", artists: [], duration: 200000 },
+        { id: "202", source: "qqmusic", title: "正在听", artists: [], duration: 240000 },
+      ],
+      members: [{ id: "me", name: "听友", online: true, ready: false }],
+      elapsedMs: 0,
+      counting: false,
+      chat: [],
+    },
+  });
+  await flushPromises();
+  expect(mocks.apply).not.toHaveBeenCalled();
+  expect(pause).not.toHaveBeenCalled();
+  expect(mocks.send).toHaveBeenCalledWith({ type: "ready", revision: 1 });
+});
+
+it("混合歌单选歌自动剔除本地与无效曲目，房间返回错误时弹出提示", async () => {
+  const { toast } = await import("@/composables/useToast");
+  const room = useTogetherStore();
+  await flushPromises();
+  mocks.receive!(state(1, 1));
+  await flushPromises();
+  mocks.send.mockClear();
+  room.command({
+    type: "queue",
+    tracks: [
+      { id: "local:file", source: "local" as never, title: "本地", artists: [], duration: 100000 },
+      { id: "bad", source: "qqmusic", title: "无时长", artists: [], duration: 0 },
+      { id: "MID88", source: "qqmusic", title: "有效在线曲", artists: [], duration: 180000 },
+    ],
+    index: 2,
+  });
+  expect(mocks.send).toHaveBeenCalledExactlyOnceWith({
+    type: "command",
+    command: {
+      type: "queue",
+      index: 0,
+      tracks: [expect.objectContaining({ id: "MID88", source: "qqmusic" })],
+    },
+  });
+
+  mocks.receive!({ ...state(1, 1), error: "队列只有一首歌，请先选择歌单或添加歌曲" });
+  expect(toast.warning).toHaveBeenCalledWith("队列只有一首歌，请先选择歌单或添加歌曲");
+});

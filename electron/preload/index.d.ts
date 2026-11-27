@@ -42,10 +42,16 @@ declare global {
           tracks: import("@shared/types/together").TogetherTrack[],
           index: number,
           position: number,
+          playing?: boolean,
         ) => Promise<void>;
         hostNetease: () => Promise<void>;
         status: () => Promise<import("@shared/types/together").TogetherStatus>;
-        host: (name: string, address?: string, avatar?: string) => Promise<string>;
+        host: (
+          name: string,
+          address?: string,
+          avatar?: string,
+          initial?: import("@shared/types/together").TogetherInitialState,
+        ) => Promise<string>;
         join: (invite: string, name: string, avatar?: string) => Promise<void>;
         send: (message: unknown) => Promise<void>;
         leave: () => Promise<void>;

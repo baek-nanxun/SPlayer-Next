@@ -61,12 +61,18 @@ const api = {
       tracks: import("@shared/types/together").TogetherTrack[],
       index: number,
       position: number,
-    ): Promise<void> => ipcRenderer.invoke("together:hostQQMusic", tracks, index, position),
+      playing?: boolean,
+    ): Promise<void> =>
+      ipcRenderer.invoke("together:hostQQMusic", tracks, index, position, playing),
     hostNetease: (): Promise<void> => ipcRenderer.invoke("together:hostNetease"),
     status: (): Promise<import("@shared/types/together").TogetherStatus> =>
       ipcRenderer.invoke("together:status"),
-    host: (name: string, address?: string, avatar?: string): Promise<string> =>
-      ipcRenderer.invoke("together:host", name, address, avatar),
+    host: (
+      name: string,
+      address?: string,
+      avatar?: string,
+      initial?: import("@shared/types/together").TogetherInitialState,
+    ): Promise<string> => ipcRenderer.invoke("together:host", name, address, avatar, initial),
     join: (invite: string, name: string, avatar?: string): Promise<void> =>
       ipcRenderer.invoke("together:join", invite, name, avatar),
     send: (message: unknown): Promise<void> => ipcRenderer.invoke("together:send", message),

@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import type {
   TogetherCommand,
+  TogetherInitialState,
   TogetherSnapshot,
   TogetherTrack,
 } from "../../../../shared/types/together";
@@ -100,6 +101,31 @@ export class TogetherRoom {
     private random: () => number = Math.random,
   ) {
     this.updatedAt = clock();
+  }
+  /** 以房主当前在线队列初始化房间，避免建房瞬间被空快照暂停
+   * @param initial - 房主当前队列、索引、进度与播放状态
+   */
+  seed(initial?: TogetherInitialState): void {
+    if (!initial?.tracks?.length) return;
+    const tracks = cleanTracks(initial.tracks);
+    const index =
+      Number.isInteger(initial.index) && initial.index >= 0 && initial.index < tracks.length
+        ? initial.index
+        : 0;
+    this.tracks = tracks;
+    this.index = index;
+    this.originalOrder = this.tracks.map((t) => `${t.source}:${t.id}`);
+    this.shuffleMode = initial.shuffleMode === "on" ? "on" : "off";
+    this.repeatMode = initial.repeatMode === "one" ? "one" : "list";
+    const maxPosition = this.tracks[this.index]?.duration ?? 0;
+    this.position = Number.isFinite(initial.position)
+      ? Math.min(maxPosition, Math.max(0, Math.round(initial.position!)))
+      : 0;
+    this.desiredPlaying = initial.playing === true;
+    this.playing = this.desiredPlaying && this.tracks.length > 0;
+    this.queueRevision = 1;
+    this.revision = 1;
+    this.updatedAt = this.clock();
   }
   /** 结算当前区间，暂停和单人在线均不累计 */
   settle(): void {
@@ -365,6 +391,7 @@ export class TogetherRoom {
         break;
       case "next":
       case "prev":
+        if (!this.tracks.length) throw new Error("请先选择在线歌曲");
         if (this.tracks.length < 2) throw new Error("队列只有一首歌，请先选择歌单或添加歌曲");
         this.index =
           (this.index + (command.type === "next" ? 1 : -1) + this.tracks.length) %
@@ -398,10 +425,16 @@ export class TogetherRoom {
 /** 启动只容纳一个双人房间的服务
  * @param port - 监听端口，0 表示由系统分配
  * @param host - 监听地址
+ * @param initial - 可选初始播放队列与进度
  */
-export const startTogetherServer = async (port = 0, host = "0.0.0.0") => {
+export const startTogetherServer = async (
+  port = 0,
+  host = "0.0.0.0",
+  initial?: TogetherInitialState,
+) => {
   const secret = randomBytes(24).toString("base64url");
   const room = new TogetherRoom();
+  room.seed(initial);
   const wss = new WebSocketServer({
     port,
     host,
@@ -446,8 +479,22 @@ export const startTogetherServer = async (port = 0, host = "0.0.0.0") => {
       ws.close(1008);
       return;
     }
+    const rawSocket = (
+      ws as WebSocket & {
+        _socket?: {
+          setKeepAlive?: (enable: boolean, initialDelay?: number) => void;
+          setNoDelay?: (noDelay?: boolean) => void;
+        };
+      }
+    )._socket;
+    rawSocket?.setKeepAlive?.(true, 10000);
+    rawSocket?.setNoDelay?.(true);
     const authTimer = setTimeout(() => ws.close(1008, "登录超时"), 15000);
     ws.on("error", () => {});
+    ws.on("ping", () => {
+      const p = peers.get(ws);
+      if (p) p.lastSeen = Date.now();
+    });
     ws.on("pong", () => {
       const p = peers.get(ws);
       if (p) p.lastSeen = Date.now();

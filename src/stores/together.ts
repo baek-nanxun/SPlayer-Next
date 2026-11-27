@@ -8,8 +8,44 @@ import {
   invalidatePlaybackOperation,
 } from "@/core/player";
 import { toast } from "@/composables/useToast";
-import { TOGETHER_MAX_TRACKS, TOGETHER_MAX_PAYLOAD } from "@shared/types/together";
-import type { TogetherCommand, TogetherStatus, TogetherTrack } from "@shared/types/together";
+import {
+  TOGETHER_MAX_TRACKS,
+  TOGETHER_MAX_PAYLOAD,
+  isShareableTogetherTrack,
+} from "@shared/types/together";
+import type {
+  TogetherCommand,
+  TogetherInitialState,
+  TogetherStatus,
+  TogetherTrack,
+} from "@shared/types/together";
+
+/** 只发送必要歌曲资料，完整歌单也不包含本地路径或大封面
+ * @param track - 本地歌曲资料
+ */
+const compactTrack = (track: TogetherTrack): TogetherTrack => {
+  const images = [track.cover, track.album?.cover].map((value) => {
+    if (!value || value.length > 2048 || !URL.canParse(value)) return undefined;
+    const url = new URL(value);
+    return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password
+      ? url.href
+      : undefined;
+  });
+  return {
+    id: track.id,
+    source: track.source,
+    title: track.title,
+    artists: track.artists.map((a) => ({ name: a.name })),
+    duration: track.duration,
+    extId: track.extId,
+    mediaId: track.mediaId,
+    cover: images[0] ?? images[1],
+    album: track.album
+      ? { id: track.album.id, name: track.album.name, cover: images[1] }
+      : undefined,
+    fee: track.fee,
+  };
+};
 
 /** 双人房间连接与权威快照应用，加载中只保留最新版本 */
 export const useTogetherStore = defineStore("together", () => {
@@ -59,6 +95,85 @@ export const useTogetherStore = defineStore("together", () => {
         "0",
       )}:${Math.floor(sec / 60) % 60 < 10 ? "0" : ""}${Math.floor(sec / 60) % 60}:${(sec % 60).toString().padStart(2, "0")}`;
   });
+  /** 提示不可共享曲目的原因
+   * @param sample - 被拒绝的曲目列表
+   */
+  const warnInvalidTracks = (sample: ReadonlyArray<{ source?: string } | undefined>): void => {
+    if (state.value.mode === "qqmusic" && sample.some((t) => t?.source !== "qqmusic")) {
+      toast.warning("QQ 官方一起听仅支持 QQ 音乐歌曲，跨平台请使用自建房间");
+      return;
+    }
+    if (state.value.mode === "netease" && sample.some((t) => t?.source !== "netease")) {
+      toast.warning("网易云官方一起听仅支持网易云歌曲，跨平台请使用自建房间");
+      return;
+    }
+    if (sample.some((t) => !["qqmusic", "netease"].includes(t?.source || ""))) {
+      toast.warning("一起听请使用 QQ 音乐或网易云在线歌曲");
+      return;
+    }
+    toast.warning("所选歌曲缺少有效在线信息，无法同步到一起听");
+  };
+  /** 围绕目标曲目裁剪有界在线队列
+   * @param list - 已过滤的在线曲目
+   * @param index - 目标曲目索引
+   * @param limit - 队列上限
+   */
+  const sliceAround = (
+    list: TogetherTrack[],
+    index: number,
+    limit: number,
+  ): { tracks: TogetherTrack[]; index: number } => {
+    const safeIndex = Math.max(0, Math.min(index, list.length - 1));
+    if (list.length <= limit) return { tracks: list, index: safeIndex };
+    const start = Math.max(0, Math.min(safeIndex - Math.floor(limit / 2), list.length - limit));
+    return { tracks: list.slice(start, start + limit), index: safeIndex - start };
+  };
+  /** 提取本机当前可共享的在线播放状态，供建房无缝继承
+   * @param mode - 目标房间模式
+   * @param limit - 最大曲目数
+   */
+  const collectInitialState = async (
+    mode?: TogetherStatus["mode"],
+    limit = TOGETHER_MAX_TRACKS,
+  ): Promise<TogetherInitialState | undefined> => {
+    const status = useStatusStore() as ReturnType<typeof useStatusStore> & {
+      position?: number;
+      shuffleMode?: "off" | "on";
+      repeatMode?: "list" | "one";
+    };
+    const shareable = playerQueue.value.filter((t) => isShareableTogetherTrack(t, mode));
+    const current = status.currentTrack;
+    if (isShareableTogetherTrack(current, mode)) {
+      const found = shareable.findIndex((t) => t.id === current.id && t.source === current.source);
+      const base = found >= 0 ? shareable : [current];
+      const sliced = sliceAround(base, found >= 0 ? found : 0, limit);
+      const live = await window.api.player?.getStatus?.().catch(() => null);
+      const rawPos = live?.success && live.data ? live.data.position : (status.position ?? 0);
+      const playing =
+        live?.success && live.data ? live.data.state === "playing" : status.state === "playing";
+      const target = sliced.tracks[sliced.index];
+      return {
+        tracks: sliced.tracks.map(compactTrack),
+        index: sliced.index,
+        position: Math.min(target.duration, Math.max(0, Math.round(rawPos))),
+        playing,
+        shuffleMode: status.shuffleMode === "on" ? "on" : "off",
+        repeatMode: status.repeatMode === "one" ? "one" : "list",
+      };
+    }
+    if (!mode && shareable.length > 0) {
+      const sliced = sliceAround(shareable, 0, limit);
+      return {
+        tracks: sliced.tracks.map(compactTrack),
+        index: sliced.index,
+        position: 0,
+        playing: false,
+        shuffleMode: status.shuffleMode === "on" ? "on" : "off",
+        repeatMode: status.repeatMode === "one" ? "one" : "list",
+      };
+    }
+    return undefined;
+  };
   /** 发送同权控制操作
    * @param command - 双方均可发起的操作
    */
@@ -67,72 +182,73 @@ export const useTogetherStore = defineStore("together", () => {
       toast.warning("房间连接中，请稍候");
       return;
     }
-    // 新建官方房间为空时，点击当前歌曲会走播放开关，必须先同步本机列表
-    if (command.type === "play" && !state.value.snapshot?.tracks.length) {
+    const maxLimit = state.value.mode === "qqmusic" ? 1000 : TOGETHER_MAX_TRACKS;
+    // 房间为空时点击播放或切歌，自动将本机当前在线队列同步进房间
+    if (
+      (command.type === "play" || command.type === "next" || command.type === "prev") &&
+      !state.value.snapshot?.tracks.length
+    ) {
       const status = useStatusStore();
-      const tracks = [...playerQueue.value];
-      const index = tracks.findIndex(
-        (t) => t.id === status.currentTrack?.id && t.source === status.currentTrack?.source,
+      const shareable = playerQueue.value.filter((t) =>
+        isShareableTogetherTrack(t, state.value.mode),
       );
-      if (!tracks.length || index < 0) {
-        toast.warning("请先选择一个在线歌单或歌曲，开始一起听");
+      const current = status.currentTrack;
+      const found = current
+        ? shareable.findIndex((t) => t.id === current.id && t.source === current.source)
+        : -1;
+      const list =
+        found >= 0
+          ? shareable
+          : isShareableTogetherTrack(current, state.value.mode)
+            ? [current]
+            : shareable;
+      if (!list.length) {
+        if (current) warnInvalidTracks([current]);
+        else toast.warning("请先选择一个在线歌单或歌曲，开始一起听");
         return;
       }
-      command = { type: "queue", tracks, index };
+      let baseIndex = found >= 0 ? found : 0;
+      if (command.type === "next" && list.length > 1) baseIndex = (baseIndex + 1) % list.length;
+      if (command.type === "prev" && list.length > 1)
+        baseIndex = (baseIndex - 1 + list.length) % list.length;
+      const sliced = sliceAround(list, baseIndex, maxLimit);
+      command = { type: "queue", tracks: sliced.tracks, index: sliced.index };
     }
-    const tracks =
-      command.type === "queue" || command.type === "enqueue"
-        ? command.tracks
-        : command.type === "playTrack"
-          ? [command.track]
-          : [];
-    if (tracks.length > TOGETHER_MAX_TRACKS) {
-      toast.warning("共享歌单最多 2000 首");
-      return;
+    if (command.type === "playTrack") {
+      if (!isShareableTogetherTrack(command.track, state.value.mode)) {
+        warnInvalidTracks([command.track]);
+        return;
+      }
+    } else if (command.type === "queue") {
+      const chosen = command.tracks[command.index];
+      if (!isShareableTogetherTrack(chosen, state.value.mode)) {
+        warnInvalidTracks(chosen ? [chosen] : command.tracks);
+        return;
+      }
+      const shareable: TogetherTrack[] = [];
+      let mappedIndex = 0;
+      for (const [i, item] of command.tracks.entries()) {
+        if (!isShareableTogetherTrack(item, state.value.mode)) continue;
+        if (i === command.index) mappedIndex = shareable.length;
+        shareable.push(item);
+      }
+      const sliced = sliceAround(shareable, mappedIndex, maxLimit);
+      command = { type: "queue", tracks: sliced.tracks, index: sliced.index };
+    } else if (command.type === "enqueue") {
+      const shareable = command.tracks
+        .filter((item) => isShareableTogetherTrack(item, state.value.mode))
+        .slice(0, maxLimit);
+      if (!shareable.length) {
+        warnInvalidTracks(command.tracks);
+        return;
+      }
+      command = { ...command, tracks: shareable };
     }
-    if (state.value.mode === "qqmusic" && tracks.some((t) => t.source !== "qqmusic")) {
-      toast.warning("QQ 官方一起听仅支持 QQ 音乐歌曲，跨平台请使用自建房间");
-      return;
-    }
-    if (state.value.mode === "netease" && tracks.some((t) => t.source !== "netease")) {
-      toast.warning("网易云官方一起听仅支持网易云歌曲，跨平台请使用自建房间");
-      return;
-    }
-    if (tracks.some((t) => !["qqmusic", "netease"].includes(t.source))) {
-      toast.warning("一起听请使用 QQ 音乐或网易云在线歌曲");
-      return;
-    }
-    /** 只发送必要歌曲资料，完整歌单也不包含本地路径或大封面
-     * @param track - 本地歌曲资料
-     */
-    const compact = (track: TogetherTrack): TogetherTrack => {
-      const images = [track.cover, track.album?.cover].map((value) => {
-        if (!value || value.length > 2048 || !URL.canParse(value)) return undefined;
-        const url = new URL(value);
-        return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password
-          ? url.href
-          : undefined;
-      });
-      return {
-        id: track.id,
-        source: track.source,
-        title: track.title,
-        artists: track.artists.map((a) => ({ name: a.name })),
-        duration: track.duration,
-        extId: track.extId,
-        mediaId: track.mediaId,
-        cover: images[0] ?? images[1],
-        album: track.album
-          ? { id: track.album.id, name: track.album.name, cover: images[1] }
-          : undefined,
-        fee: track.fee,
-      };
-    };
     const outgoing =
       command.type === "queue" || command.type === "enqueue"
-        ? { ...command, tracks: tracks.map(compact) }
+        ? { ...command, tracks: command.tracks.map(compactTrack) }
         : command.type === "playTrack"
-          ? { ...command, track: compact(command.track) }
+          ? { ...command, track: compactTrack(command.track) }
           : command;
     const message = JSON.stringify({ type: "command", command: outgoing });
     if (new TextEncoder().encode(message).length > TOGETHER_MAX_PAYLOAD) {
@@ -199,8 +315,32 @@ export const useTogetherStore = defineStore("together", () => {
           if (Date.now() < retryAt) continue;
           applyingRevision = snapshot.revision;
           const position = snapshot.position + (snapshot.playing ? Date.now() - job.received : 0);
-          await applyTogetherSnapshot({ ...snapshot, position }, current);
-          if (!current()) continue;
+          const target = snapshot.tracks[snapshot.index];
+          const localStatus = useStatusStore();
+          let seamlessHostSync = false;
+          if (
+            applied === "" &&
+            job.state.hosting &&
+            target &&
+            localStatus.currentTrack?.id === target.id &&
+            localStatus.currentTrack?.source === target.source &&
+            (localStatus.state === "playing") === snapshot.playing
+          ) {
+            const live = await window.api.player?.getStatus?.().catch(() => null);
+            if (!current()) continue;
+            if (
+              live?.success &&
+              live.data &&
+              (live.data.state === "playing") === snapshot.playing &&
+              Math.abs(live.data.position - position) < 1500
+            ) {
+              seamlessHostSync = true;
+            }
+          }
+          if (!seamlessHostSync) {
+            await applyTogetherSnapshot({ ...snapshot, position }, current);
+            if (!current()) continue;
+          }
           applied = key;
           if (playbackError.value)
             void window.api.together
@@ -234,15 +374,23 @@ export const useTogetherStore = defineStore("together", () => {
       busy = false;
     }
   };
-  /** 接收房间状态并仅在本机断线时暂停
+  /** 接收房间状态并仅在退出有效房间连接时暂停
    * @param latest - 主进程连接状态
    */
   const receive = (latest: TogetherStatus): void => {
     const old = state.value;
+    const hadActiveRoom =
+      old.connection === "connected" || (old.connection === "reconnecting" && !!old.snapshot);
+    const hasActiveRoom =
+      latest.connection === "connected" ||
+      (latest.connection === "reconnecting" && !!latest.snapshot);
     if (latest.connection === "idle") {
       playbackError.value = "";
       lastPlaybackError = "";
       lastErrorAt = 0;
+    }
+    if (latest.error && latest.error !== old.error && latest.connection !== "reconnecting") {
+      toast.warning(latest.error);
     }
     if (latest.invite !== old.invite || latest.connection === "idle") {
       lastChatId = 0;
@@ -281,7 +429,7 @@ export const useTogetherStore = defineStore("together", () => {
       applyTogetherQueue(latest.snapshot);
     receivedAt = Date.now();
     now.value = receivedAt;
-    setTogetherControl(latest.connection === "idle" ? null : command);
+    setTogetherControl(hasActiveRoom ? command : null);
     if (latest.connection === "reconnecting" && latest.snapshot) {
       localReady = null;
       driftAt = 0;
@@ -297,7 +445,7 @@ export const useTogetherStore = defineStore("together", () => {
       localReady = null;
       localSample = null;
       profileSent = "";
-      if (old.connection !== "idle") {
+      if (hadActiveRoom) {
         invalidatePlaybackOperation();
         void window.api.player.pause();
         useStatusStore().state = "paused";
@@ -341,13 +489,74 @@ export const useTogetherStore = defineStore("together", () => {
     clearInterval(timer);
     setTogetherControl(null);
   });
-  /** 创建双人房间
+  /** 创建双人自建房间，自动继承当前在线歌曲与播放状态
    * @param address - 可选 VPN 或局域网 IP
    */
-  const host = async (address?: string): Promise<void> => {
+  const host = async (address?: string): Promise<string> => {
     playbackError.value = "";
     const profile = useAccountStore().profile;
-    await window.api.together.host(profile?.nickname || "听友", address, profile?.avatarUrl);
+    const initial = await collectInitialState();
+    const nickname = profile?.nickname || "听友";
+    const invite = initial
+      ? await window.api.together.host(nickname, address, profile?.avatarUrl, initial)
+      : await window.api.together.host(nickname, address, profile?.avatarUrl);
+    if (invite && !state.value.invite) {
+      state.value = { ...state.value, invite };
+    }
+    return invite;
+  };
+  /** 创建 QQ 音乐官方一起听房间，若正在听 QQ 音乐则直接携带当前歌单与状态 */
+  const hostQQMusic = async (): Promise<void> => {
+    playbackError.value = "";
+    const status = useStatusStore();
+    const initial =
+      status.currentTrack?.source === "qqmusic"
+        ? await collectInitialState("qqmusic", 1000)
+        : undefined;
+    if (initial?.tracks.length) {
+      try {
+        await window.api.together.hostQQMusic(
+          initial.tracks,
+          initial.index,
+          initial.position ?? 0,
+          initial.playing ?? false,
+        );
+        return;
+      } catch (error) {
+        if (!String(error).includes("身份解析失败")) throw error;
+      }
+    }
+    await window.api.together.hostQQMusic([], 0, 0);
+  };
+  /** 创建网易云官方一起听房间，若正在听网易云则建房后自动同步当前队列与进度 */
+  const hostNetease = async (): Promise<void> => {
+    playbackError.value = "";
+    const status = useStatusStore();
+    const initial =
+      status.currentTrack?.source === "netease"
+        ? await collectInitialState("netease", TOGETHER_MAX_TRACKS)
+        : undefined;
+    await window.api.together.hostNetease();
+    if (
+      initial?.tracks.length &&
+      state.value.connection === "connected" &&
+      !state.value.snapshot?.tracks.length
+    ) {
+      await window.api.together.send({
+        type: "command",
+        command: { type: "queue", tracks: initial.tracks, index: initial.index },
+      });
+      if ((initial.position ?? 0) > 1500) {
+        await window.api.together
+          .send({ type: "command", command: { type: "seek", position: initial.position! } })
+          .catch(() => {});
+      }
+      if (!initial.playing) {
+        await window.api.together
+          .send({ type: "command", command: { type: "pause" } })
+          .catch(() => {});
+      }
+    }
   };
   /** 加入邀请码指定的房间
    * @param invite - 房间邀请码
@@ -377,6 +586,8 @@ export const useTogetherStore = defineStore("together", () => {
     playbackError,
     command,
     host,
+    hostQQMusic,
+    hostNetease,
     join,
     leave,
   };

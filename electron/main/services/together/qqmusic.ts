@@ -129,8 +129,14 @@ export class QQMusicTogether {
    * @param tracks - 初始队列，省略时先创建空房间
    * @param index - 当前歌曲位置
    * @param position - 当前毫秒进度
+   * @param playing - 建房后是否保持播放状态
    */
-  async host(tracks: TogetherTrack[] = [], index = 0, position = 0): Promise<void> {
+  async host(
+    tracks: TogetherTrack[] = [],
+    index = 0,
+    position = 0,
+    playing = false,
+  ): Promise<void> {
     this.shareEncryptedUin = this.ownUins[1] || "";
     this.state("connecting");
     return this.enqueue(async () => {
@@ -147,7 +153,8 @@ export class QQMusicTogether {
       if (this.stopped) return;
       this.hosting = true;
       this.invite = `https://i.y.qq.com/n2/m/share/listen_together/index.html?showid=${this.showID}${queue.length ? `&songid=${queue[index].songID}` : ""}`;
-      if (queue.length) await this.api.control(this.showID, 3, queue, index, Math.round(position));
+      if (queue.length)
+        await this.api.control(this.showID, playing ? 2 : 3, queue, index, Math.round(position));
       await this.refresh();
       this.schedule();
     });

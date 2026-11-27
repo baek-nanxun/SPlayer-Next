@@ -231,3 +231,43 @@ it("播放诊断只写本机日志，不把带凭据的错误发给听友", asyn
   expect(text).toContain("playback-error");
   expect(text).not.toContain("secret-value");
 });
+
+it("自建房建房时支持预置当前播放歌单与进度，首帧快照即保持播放态", async () => {
+  await invoke("host", "听友", "127.0.0.1", "https://example.com/avatar.jpg", {
+    tracks: [
+      { source: "netease", id: "1982796627", title: "在听的歌", artists: [], duration: 240000 },
+      { source: "qqmusic", id: "MID22", title: "下一首", artists: [], duration: 210000 },
+    ],
+    index: 0,
+    position: 35000,
+    playing: true,
+    shuffleMode: "on",
+    repeatMode: "one",
+  });
+  for (let i = 0; i < 100; i++) {
+    if (((await invoke("status")) as { connection: string }).connection === "connected") break;
+    await new Promise((done) => setTimeout(done, 5));
+  }
+  const status = (await invoke("status")) as {
+    connection: string;
+    hosting: boolean;
+    snapshot: {
+      playing: boolean;
+      desiredPlaying: boolean;
+      index: number;
+      position: number;
+      shuffleMode: string;
+      repeatMode: string;
+      tracks: Array<{ id: string }>;
+    };
+  };
+  expect(status.connection).toBe("connected");
+  expect(status.hosting).toBe(true);
+  expect(status.snapshot.playing).toBe(true);
+  expect(status.snapshot.desiredPlaying).toBe(true);
+  expect(status.snapshot.index).toBe(0);
+  expect(status.snapshot.position).toBeGreaterThanOrEqual(35000);
+  expect(status.snapshot.shuffleMode).toBe("on");
+  expect(status.snapshot.repeatMode).toBe("one");
+  expect(status.snapshot.tracks.map((t) => t.id)).toEqual(["1982796627", "MID22"]);
+});

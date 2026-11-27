@@ -48,6 +48,41 @@ export interface TogetherSnapshot {
   counting: boolean;
   chat: Array<{ id: number; senderId?: string; name: string; text: string }>;
 }
+export interface TogetherInitialState {
+  tracks: TogetherTrack[];
+  index: number;
+  position?: number;
+  playing?: boolean;
+  shuffleMode?: ShuffleMode;
+  repeatMode?: RepeatMode;
+}
+
+/** 校验曲目是否满足一起听在线共享条件
+ * @param track - 待检查的曲目
+ * @param mode - 当前房间模式
+ */
+export const isShareableTogetherTrack = (
+  track: Partial<TogetherTrack> | null | undefined,
+  mode?: "self" | "netease" | "qqmusic",
+): track is TogetherTrack => {
+  if (
+    !track ||
+    typeof track.id !== "string" ||
+    !/^[a-zA-Z0-9]+$/.test(track.id) ||
+    track.id.length > 80 ||
+    typeof track.title !== "string" ||
+    typeof track.duration !== "number" ||
+    !Number.isFinite(track.duration) ||
+    track.duration <= 0 ||
+    track.duration > 86400000
+  ) {
+    return false;
+  }
+  if (mode === "qqmusic") return track.source === "qqmusic";
+  if (mode === "netease") return track.source === "netease";
+  return track.source === "qqmusic" || track.source === "netease";
+};
+
 export interface TogetherStatus {
   memberId?: string;
   mode?: "self" | "netease" | "qqmusic";
