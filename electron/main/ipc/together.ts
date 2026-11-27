@@ -408,12 +408,11 @@ export const registerTogetherIpc = (): void => {
       state.hosting = true;
       publish();
       try {
-        const created = await startTogetherServer();
+        const created = await startTogetherServer(0, "0.0.0.0", initial);
         if (epoch !== generation) {
           created.close();
           throw new Error("本次建房已取消");
         }
-        if (initial) created.room.seed(initial);
         server = created;
         const invite =
           "splayer-together:" +

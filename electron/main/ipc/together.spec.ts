@@ -32,8 +32,8 @@ vi.mock("@main/services/together/room", async (original) => {
   const actual = await original<typeof import("@main/services/together/room")>();
   return {
     ...actual,
-    startTogetherServer: async () => {
-      const server = await actual.startTogetherServer();
+    startTogetherServer: async (...args: Parameters<typeof actual.startTogetherServer>) => {
+      const server = await actual.startTogetherServer(...args);
       mocks.servers.push(server);
       return server;
     },
@@ -101,6 +101,20 @@ it("重复创建自建房只启动一个服务，不留下失控的房间连接"
   const duplicate = expect(invoke("host", "听友", "127.0.0.1")).rejects.toThrow("退出");
   await creating;
   await duplicate;
+  expect(mocks.servers).toHaveLength(1);
+});
+
+it("初始歌单校验失败时不启动监听，清理连接状态后允许重新建房", async () => {
+  await expect(
+    invoke("host", "听友", "127.0.0.1", undefined, {
+      tracks: [{ source: "local", id: "invalid", title: "本地歌曲", duration: 180000 }],
+      index: 0,
+      playing: true,
+    }),
+  ).rejects.toThrow("在线歌曲");
+  expect(mocks.servers).toHaveLength(0);
+  expect(await invoke("status")).toMatchObject({ connection: "idle", snapshot: null });
+  await invoke("host", "听友", "127.0.0.1");
   expect(mocks.servers).toHaveLength(1);
 });
 
