@@ -2,7 +2,7 @@ import { app, ipcMain } from "electron";
 import { QQMusicTogether } from "@main/services/together/qqmusic";
 import { createQQTogetherApi, parseQQTogetherInvite } from "@main/apis/qqmusic/core/together";
 import { getQQMusicCookies, getQQMusicUin, qmRequest } from "@main/apis/qqmusic/core/request";
-import type { TogetherTrack } from "@shared/types/together";
+import type { TogetherInitialState, TogetherStatus, TogetherTrack } from "@shared/types/together";
 import { callNetease, getNeteaseCookies } from "@main/apis/netease";
 import { NeteaseTogether, parseNeteaseInvite } from "@main/services/together/netease";
 import { fetchNeteaseDirect } from "@main/apis/netease/core/direct";
@@ -14,7 +14,6 @@ import { sendToMain } from "@main/utils/broadcast";
 import { cleanAvatar, cleanTracks, startTogetherServer } from "@main/services/together/room";
 import { TOGETHER_MAX_PAYLOAD } from "@shared/types/together";
 import { coreLog } from "@main/utils/logger";
-import type { TogetherStatus } from "@shared/types/together";
 
 /** 注册双人房间连接，凭据仅用于房间，不传音乐账号 Cookie */
 export const registerTogetherIpc = (): void => {
@@ -23,6 +22,7 @@ export const registerTogetherIpc = (): void => {
   let server: Awaited<ReturnType<typeof startTogetherServer>> | null = null;
   let socket: WebSocket | null = null;
   let reconnect: ReturnType<typeof setTimeout> | null = null;
+  let watchdog: ReturnType<typeof setInterval> | null = null;
   let attempts = 0;
   let generation = 0;
   let diagnosticAt = 0;
@@ -35,6 +35,11 @@ export const registerTogetherIpc = (): void => {
   };
   /** 推送连接状态 */
   const publish = (): void => sendToMain("together:status", state);
+  /** 清理客户端心跳监控 */
+  const clearWatchdog = (): void => {
+    if (watchdog) clearInterval(watchdog);
+    watchdog = null;
+  };
   /** 退出确认完成前不启动新房间，避免同一账号的官方写请求交错 */
   const assertIdle = (): void => {
     if (leavingOfficial) throw new Error("上次退房正在确认，请稍候重试");
@@ -47,6 +52,7 @@ export const registerTogetherIpc = (): void => {
     generation++;
     if (reconnect) clearTimeout(reconnect);
     reconnect = null;
+    clearWatchdog();
     const previousSocket = socket;
     if (previousSocket?.readyState === WebSocket.OPEN) {
       const closing = setTimeout(() => previousSocket.terminate(), 5000);
@@ -88,9 +94,30 @@ export const registerTogetherIpc = (): void => {
     /** 建立当前代次的 WebSocket */
     const open = (): void => {
       if (epoch !== generation) return;
+      clearWatchdog();
       const ws = new WebSocket(url, { maxPayload: TOGETHER_MAX_PAYLOAD, handshakeTimeout: 20000 });
       socket = ws;
-      ws.on("open", () =>
+      let lastSeen = Date.now();
+      ws.on("open", () => {
+        lastSeen = Date.now();
+        const rawSocket = (
+          ws as WebSocket & {
+            _socket?: {
+              setKeepAlive?: (enable: boolean, initialDelay?: number) => void;
+              setNoDelay?: (noDelay?: boolean) => void;
+            };
+          }
+        )._socket;
+        rawSocket?.setKeepAlive?.(true, 10000);
+        rawSocket?.setNoDelay?.(true);
+        clearWatchdog();
+        watchdog = setInterval(() => {
+          if (epoch !== generation || socket !== ws) {
+            clearWatchdog();
+            return;
+          }
+          if (Date.now() - lastSeen >= 20000) ws.terminate();
+        }, 5000);
         ws.send(
           JSON.stringify({
             type: "join",
@@ -100,10 +127,17 @@ export const registerTogetherIpc = (): void => {
             avatar: cleanAvatar(avatar),
             name: name.slice(0, 40) || "听友",
           }),
-        ),
-      );
+        );
+      });
+      ws.on("ping", () => {
+        lastSeen = Date.now();
+      });
+      ws.on("pong", () => {
+        lastSeen = Date.now();
+      });
       ws.on("message", (data) => {
         if (epoch !== generation || socket !== ws) return;
+        lastSeen = Date.now();
         try {
           const msg = JSON.parse(data.toString());
           if (msg.type === "state") {
@@ -199,6 +233,7 @@ export const registerTogetherIpc = (): void => {
       });
       ws.on("close", (code) => {
         if (epoch !== generation || socket !== ws) return;
+        clearWatchdog();
         coreLog.warn("[together] 自建房连接中断", {
           code,
           attempts,
@@ -294,7 +329,7 @@ export const registerTogetherIpc = (): void => {
   };
   ipcMain.handle(
     "together:hostQQMusic",
-    async (_event, tracks: TogetherTrack[], index: number, position: number) => {
+    async (_event, tracks: TogetherTrack[], index: number, position: number, playing = false) => {
       assertIdle();
       const cleaned = Array.isArray(tracks) && tracks.length === 0 ? [] : cleanTracks(tracks);
       if (cleaned.some((t) => t.source !== "qqmusic"))
@@ -303,7 +338,7 @@ export const registerTogetherIpc = (): void => {
       const client = qqClient();
       official = client;
       try {
-        await client.host(cleaned, index, position);
+        await client.host(cleaned, index, position, Boolean(playing));
       } catch (error) {
         if (official === client) leave();
         throw error;
@@ -338,13 +373,18 @@ export const registerTogetherIpc = (): void => {
     }
     throw new Error("网易云分享链接跳转过多");
   };
-  ipcMain.handle("together:hostNetease", async () => {
+  ipcMain.handle("together:hostNetease", async (_event, initial?: TogetherInitialState) => {
     assertIdle();
+    const cleaned = initial?.tracks?.length
+      ? { ...initial, tracks: cleanTracks(initial.tracks) }
+      : undefined;
+    if (cleaned?.tracks.some((t) => t.source !== "netease"))
+      throw new Error("网易云官方房间仅支持网易云歌曲");
     leave();
     const client = officialClient();
     official = client;
     try {
-      await client.start();
+      await (cleaned ? client.start(undefined, cleaned) : client.start());
     } catch (error) {
       if (official === client) leave();
       throw error;
@@ -353,7 +393,13 @@ export const registerTogetherIpc = (): void => {
   ipcMain.handle("together:status", () => state);
   ipcMain.handle(
     "together:host",
-    async (_event, name: string, address?: string, avatar?: string) => {
+    async (
+      _event,
+      name: string,
+      address?: string,
+      avatar?: string,
+      initial?: TogetherInitialState,
+    ) => {
       assertIdle();
       const host = selectTogetherAddress(networkInterfaces(), address);
       leave();
@@ -362,7 +408,7 @@ export const registerTogetherIpc = (): void => {
       state.hosting = true;
       publish();
       try {
-        const created = await startTogetherServer();
+        const created = await startTogetherServer(0, "0.0.0.0", initial);
         if (epoch !== generation) {
           created.close();
           throw new Error("本次建房已取消");

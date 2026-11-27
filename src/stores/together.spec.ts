@@ -6,14 +6,21 @@ const mocks = vi.hoisted(() => ({
   queue: vi.fn(),
   apply: vi.fn().mockResolvedValue(undefined),
   invalidate: vi.fn(),
+  normalize: vi.fn().mockResolvedValue(undefined),
   send: vi.fn().mockResolvedValue(undefined),
   receive: null as ((state: TogetherStatus) => void) | null,
   host: vi.fn(),
+  hostNetease: vi.fn(),
+  hostQQMusic: vi.fn(),
   join: vi.fn(),
   status: vi.fn(),
   localTracks: [] as import("@shared/types/player").Track[],
+  mediaTrack: null as import("@shared/types/player").Track | null,
   localStatus: {
     state: "paused",
+    currentSource: "https://music.example/stream.flac" as string | null,
+    fmMode: false,
+    speed: 1,
     currentTrack: null as import("@shared/types/player").Track | null,
   },
 }));
@@ -21,10 +28,18 @@ vi.mock("@/core/player", () => ({
   applyTogetherQueue: mocks.queue,
   applyTogetherSnapshot: mocks.apply,
   invalidatePlaybackOperation: mocks.invalidate,
+  normalizeTogetherPlayback: mocks.normalize,
 }));
 vi.mock("./account", () => ({
   useAccountStore: () => ({
     profile: { nickname: "听友", avatarUrl: "https://example.com/avatar.jpg" },
+  }),
+}));
+vi.mock("./media", () => ({
+  useMediaStore: () => ({
+    get track() {
+      return mocks.mediaTrack;
+    },
   }),
 }));
 vi.mock("./status", () => ({ useStatusStore: () => mocks.localStatus }));
@@ -66,8 +81,16 @@ const state = (queueRevision: number, count: number): TogetherStatus => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.localTracks = [];
+  mocks.mediaTrack = null;
   mocks.localStatus.currentTrack = null;
+  mocks.localStatus.currentSource = "https://music.example/stream.flac";
+  mocks.localStatus.fmMode = false;
+  mocks.localStatus.speed = 1;
+  mocks.localStatus.state = "paused";
   mocks.apply.mockReset().mockResolvedValue(undefined);
+  mocks.normalize.mockReset().mockResolvedValue(undefined);
+  mocks.hostNetease.mockReset().mockResolvedValue(undefined);
+  mocks.hostQQMusic.mockReset().mockResolvedValue(undefined);
   mocks.status.mockResolvedValue({ success: true, data: { position: 10000, state: "playing" } });
   pinia = createPinia();
   setActivePinia(pinia);
@@ -87,6 +110,8 @@ beforeEach(() => {
         }),
         send: mocks.send,
         host: mocks.host,
+        hostNetease: mocks.hostNetease,
+        hostQQMusic: mocks.hostQQMusic,
         join: mocks.join,
       },
       player: {
@@ -413,4 +438,181 @@ it("播放失败会记录限频诊断，恢复后清除错误并上报恢复", a
   await flushPromises();
   expect(room.playbackError).toBe("");
   expect(mocks.send).toHaveBeenCalledWith({ type: "diagnostic", event: "playback-recovered" });
+});
+
+it("正在播放歌曲时创建自建房间，继承当前队列与进度且连接阶段绝不暂停或重拖本机音频", async () => {
+  const room = useTogetherStore();
+  await flushPromises();
+  const pause = vi.spyOn(window.api.player, "pause");
+  mocks.localTracks = [
+    { id: "local1", source: "local" as const, title: "本地曲", artists: [], duration: 120000 },
+    { id: "101", source: "netease" as const, title: "第一首", artists: [], duration: 200000 },
+    { id: "202", source: "qqmusic" as const, title: "正在听", artists: [], duration: 240000 },
+  ];
+  mocks.localStatus.currentTrack = mocks.localTracks[2];
+  mocks.mediaTrack = mocks.localTracks[2];
+  mocks.localStatus.state = "playing";
+  mocks.status.mockResolvedValue({ success: true, data: { position: 42300, state: "playing" } });
+  mocks.host.mockResolvedValue("splayer-together:invite");
+
+  await room.host("100.80.1.2");
+  expect(mocks.host).toHaveBeenCalledWith(
+    "听友",
+    "100.80.1.2",
+    "https://example.com/avatar.jpg",
+    expect.objectContaining({
+      index: 1,
+      position: 42300,
+      playing: true,
+      tracks: [
+        expect.objectContaining({ id: "101", source: "netease" }),
+        expect.objectContaining({ id: "202", source: "qqmusic" }),
+      ],
+    }),
+  );
+
+  // 连续收到两次 connecting 状态也不会误判为断线暂停
+  mocks.receive!({
+    connection: "connecting",
+    hosting: true,
+    invite: "",
+    error: "",
+    snapshot: null,
+  });
+  mocks.receive!({
+    connection: "connecting",
+    hosting: true,
+    invite: "splayer-together:invite",
+    error: "",
+    snapshot: null,
+  });
+  expect(pause).not.toHaveBeenCalled();
+  expect(mocks.localStatus.state).toBe("playing");
+
+  // 收到带初始进度的连接快照后，归一化播放模式并直接确认 ready 而不触发 seek 重绑
+  mocks.apply.mockClear();
+  mocks.send.mockClear();
+  mocks.receive!({
+    connection: "connected",
+    hosting: true,
+    invite: "splayer-together:invite",
+    error: "",
+    snapshot: {
+      revision: 1,
+      queueRevision: 1,
+      serverTime: Date.now(),
+      position: 42350,
+      playing: true,
+      desiredPlaying: true,
+      index: 1,
+      tracks: [
+        { id: "101", source: "netease", title: "第一首", artists: [], duration: 200000 },
+        { id: "202", source: "qqmusic", title: "正在听", artists: [], duration: 240000 },
+      ],
+      members: [{ id: "me", name: "听友", online: true, ready: false }],
+      elapsedMs: 0,
+      counting: false,
+      chat: [],
+    },
+  });
+  await flushPromises();
+  expect(mocks.normalize).toHaveBeenCalledOnce();
+  expect(mocks.apply).not.toHaveBeenCalled();
+  expect(pause).not.toHaveBeenCalled();
+  expect(mocks.send).toHaveBeenCalledWith({ type: "ready", revision: 1 });
+});
+
+it("私人 FM 播放且残留旧队列时，建房以实际加载的 FM 曲目为准而非旧队列项", async () => {
+  const room = useTogetherStore();
+  await flushPromises();
+  const staleTrack = {
+    id: "stale99",
+    source: "qqmusic" as const,
+    title: "旧队列曲目",
+    artists: [],
+    duration: 200000,
+  };
+  const fmTrack = {
+    id: "888999",
+    source: "netease" as const,
+    title: "私人FM曲目",
+    artists: [],
+    duration: 180000,
+  };
+  mocks.localTracks = [staleTrack];
+  mocks.localStatus.currentTrack = staleTrack;
+  mocks.localStatus.fmMode = true;
+  mocks.localStatus.state = "playing";
+  mocks.mediaTrack = fmTrack;
+  mocks.status.mockResolvedValue({ success: true, data: { position: 26000, state: "playing" } });
+
+  await room.host("127.0.0.1");
+  expect(mocks.host).toHaveBeenCalledWith(
+    "听友",
+    "127.0.0.1",
+    "https://example.com/avatar.jpg",
+    expect.objectContaining({
+      index: 0,
+      position: 26000,
+      playing: true,
+      tracks: [expect.objectContaining({ id: "888999", source: "netease" })],
+    }),
+  );
+});
+
+it("暂停状态下创建网易云官方房，将初始队列与暂停态原子交由主进程建房而非发送播放队列命令", async () => {
+  const room = useTogetherStore();
+  await flushPromises();
+  const pausedSong = {
+    id: "1982796627",
+    source: "netease" as const,
+    title: "暂停中的歌",
+    artists: [],
+    duration: 240000,
+  };
+  mocks.localTracks = [pausedSong];
+  mocks.localStatus.currentTrack = pausedSong;
+  mocks.mediaTrack = pausedSong;
+  mocks.localStatus.state = "paused";
+  mocks.status.mockResolvedValue({ success: true, data: { position: 31000, state: "paused" } });
+
+  await room.hostNetease();
+  expect(mocks.hostNetease).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      index: 0,
+      position: 31000,
+      playing: false,
+      tracks: [expect.objectContaining({ id: "1982796627", source: "netease" })],
+    }),
+  );
+  expect(mocks.send).not.toHaveBeenCalled();
+});
+
+it("混合歌单选歌自动剔除本地与无效曲目，房间返回错误时弹出提示", async () => {
+  const { toast } = await import("@/composables/useToast");
+  const room = useTogetherStore();
+  await flushPromises();
+  mocks.receive!(state(1, 1));
+  await flushPromises();
+  mocks.send.mockClear();
+  room.command({
+    type: "queue",
+    tracks: [
+      { id: "local:file", source: "local" as never, title: "本地", artists: [], duration: 100000 },
+      { id: "bad", source: "qqmusic", title: "无时长", artists: [], duration: 0 },
+      { id: "MID88", source: "qqmusic", title: "有效在线曲", artists: [], duration: 180000 },
+    ],
+    index: 2,
+  });
+  expect(mocks.send).toHaveBeenCalledExactlyOnceWith({
+    type: "command",
+    command: {
+      type: "queue",
+      index: 0,
+      tracks: [expect.objectContaining({ id: "MID88", source: "qqmusic" })],
+    },
+  });
+
+  mocks.receive!({ ...state(1, 1), error: "队列只有一首歌，请先选择歌单或添加歌曲" });
+  expect(toast.warning).toHaveBeenCalledWith("队列只有一首歌，请先选择歌单或添加歌曲");
 });

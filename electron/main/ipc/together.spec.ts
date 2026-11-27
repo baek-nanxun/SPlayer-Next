@@ -32,8 +32,8 @@ vi.mock("@main/services/together/room", async (original) => {
   const actual = await original<typeof import("@main/services/together/room")>();
   return {
     ...actual,
-    startTogetherServer: async () => {
-      const server = await actual.startTogetherServer();
+    startTogetherServer: async (...args: Parameters<typeof actual.startTogetherServer>) => {
+      const server = await actual.startTogetherServer(...args);
       mocks.servers.push(server);
       return server;
     },
@@ -101,6 +101,20 @@ it("重复创建自建房只启动一个服务，不留下失控的房间连接"
   const duplicate = expect(invoke("host", "听友", "127.0.0.1")).rejects.toThrow("退出");
   await creating;
   await duplicate;
+  expect(mocks.servers).toHaveLength(1);
+});
+
+it("初始歌单校验失败时不启动监听，清理连接状态后允许重新建房", async () => {
+  await expect(
+    invoke("host", "听友", "127.0.0.1", undefined, {
+      tracks: [{ source: "local", id: "invalid", title: "本地歌曲", duration: 180000 }],
+      index: 0,
+      playing: true,
+    }),
+  ).rejects.toThrow("在线歌曲");
+  expect(mocks.servers).toHaveLength(0);
+  expect(await invoke("status")).toMatchObject({ connection: "idle", snapshot: null });
+  await invoke("host", "听友", "127.0.0.1");
   expect(mocks.servers).toHaveLength(1);
 });
 
@@ -230,4 +244,44 @@ it("播放诊断只写本机日志，不把带凭据的错误发给听友", asyn
   const text = JSON.stringify(vi.mocked(coreLog.info).mock.calls);
   expect(text).toContain("playback-error");
   expect(text).not.toContain("secret-value");
+});
+
+it("自建房建房时支持预置当前播放歌单与进度，首帧快照即保持播放态", async () => {
+  await invoke("host", "听友", "127.0.0.1", "https://example.com/avatar.jpg", {
+    tracks: [
+      { source: "netease", id: "1982796627", title: "在听的歌", artists: [], duration: 240000 },
+      { source: "qqmusic", id: "MID22", title: "下一首", artists: [], duration: 210000 },
+    ],
+    index: 0,
+    position: 35000,
+    playing: true,
+    shuffleMode: "on",
+    repeatMode: "one",
+  });
+  for (let i = 0; i < 100; i++) {
+    if (((await invoke("status")) as { connection: string }).connection === "connected") break;
+    await new Promise((done) => setTimeout(done, 5));
+  }
+  const status = (await invoke("status")) as {
+    connection: string;
+    hosting: boolean;
+    snapshot: {
+      playing: boolean;
+      desiredPlaying: boolean;
+      index: number;
+      position: number;
+      shuffleMode: string;
+      repeatMode: string;
+      tracks: Array<{ id: string }>;
+    };
+  };
+  expect(status.connection).toBe("connected");
+  expect(status.hosting).toBe(true);
+  expect(status.snapshot.playing).toBe(true);
+  expect(status.snapshot.desiredPlaying).toBe(true);
+  expect(status.snapshot.index).toBe(0);
+  expect(status.snapshot.position).toBeGreaterThanOrEqual(35000);
+  expect(status.snapshot.shuffleMode).toBe("on");
+  expect(status.snapshot.repeatMode).toBe("one");
+  expect(status.snapshot.tracks.map((t) => t.id)).toEqual(["1982796627", "MID22"]);
 });

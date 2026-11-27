@@ -5,15 +5,73 @@ import { openExternal } from "@/utils/url";
 const open = defineModel<boolean>("open", { default: false });
 const room = useTogetherStore();
 const official = computed(() => room.state.mode === "netease" || room.state.mode === "qqmusic");
-/** 先创建暂停的 QQ 官方空房间，连接后再由任一方选歌 */
-const hostQQMusic = (): Promise<void> => window.api.together.hostQQMusic([], 0, 0);
 const invite = ref("");
 const address = ref("");
 const busy = ref(false);
 const active = computed(() => room.state.connection !== "idle");
 const snapshot = computed(() => room.state.snapshot);
-/** 创建可与网易云官方客户端互通的房间 */
-const hostNetease = (): Promise<void> => window.api.together.hostNetease();
+/**
+ * 静默写入剪贴板并返回是否成功
+ * @param text - 待写入剪贴板的文本
+ * @returns 是否成功写入剪贴板
+ */
+const writeClipboard = async (text: string): Promise<boolean> => {
+  if (!text) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+};
+/**
+ * 构造 QQ 官方分享文案
+ * @returns 包含歌名与房间链接的完整官方分享文案
+ */
+const formatQQInvite = (): string =>
+  `#QQ音乐# 快来跟我一起听《${snapshot.value?.tracks[snapshot.value.index]?.title || "歌曲"}》 ${room.state.appInvite} @QQ音乐`;
+/** 创建自建房间并自动复制邀请码、释放模态遮罩 */
+const startSelfHost = async (): Promise<void> => {
+  const createdInvite = await room.host(address.value.trim() || undefined);
+  if (await writeClipboard(createdInvite || room.state.invite)) {
+    toast.success("房间已创建，邀请码已复制");
+    open.value = false;
+  } else {
+    toast.warning("房间已创建，请手动复制邀请码");
+  }
+};
+/** 创建可与网易云官方客户端互通的房间并自动复制邀请链接 */
+const startNetease = async (): Promise<void> => {
+  await (room.hostNetease ? room.hostNetease() : window.api.together.hostNetease());
+  if (await writeClipboard(room.state.invite)) {
+    toast.success("房间已创建，邀请链接已复制");
+    open.value = false;
+  } else {
+    toast.warning("房间已创建，请手动复制邀请链接");
+  }
+};
+/** 创建 QQ 音乐官方一起听房间并复制对应邀请 */
+const startQQMusic = async (): Promise<void> => {
+  await (room.hostQQMusic ? room.hostQQMusic() : window.api.together.hostQQMusic([], 0, 0));
+  const text = room.state.appInvite ? formatQQInvite() : room.state.invite;
+  if (await writeClipboard(text)) {
+    toast.success(
+      room.state.appInvite
+        ? "房间已创建，QQ 音乐邀请已复制"
+        : "房间已创建，SPlayer 邀请已复制；选歌后可复制官方 App 邀请",
+    );
+    open.value = false;
+  } else {
+    toast.warning("房间已创建，请手动复制邀请");
+  }
+};
+/** 加入房间后自动收起弹窗，恢复播放器操作 */
+const startJoin = async (): Promise<void> => {
+  await room.join(invite.value);
+  invite.value = "";
+  toast.success("已加入一起听");
+  open.value = false;
+};
 /** 执行连接操作并展示错误
  * @param task - 创建或加入操作
  */
@@ -27,20 +85,19 @@ const run = async (task: () => Promise<void>): Promise<void> => {
     busy.value = false;
   }
 };
-/** 复制房间邀请码 */
+/**
+ * 复制房间邀请码并弹出结果提示
+ * @param text - 待复制的邀请码或分享文案
+ */
 const copy = async (text = room.state.invite): Promise<void> => {
-  try {
-    await navigator.clipboard.writeText(text);
+  if (await writeClipboard(text)) {
     toast.success("邀请码已复制");
-  } catch {
+  } else {
     toast.warning("请手动复制邀请码");
   }
 };
 /** 复制完整官方分享文案，QQ 音乐页面需要分享者与歌曲资料 */
-const copyQQ = (): Promise<void> =>
-  copy(
-    `#QQ音乐# 快来跟我一起听《${snapshot.value?.tracks[snapshot.value.index]?.title || "歌曲"}》 ${room.state.appInvite} @QQ音乐`,
-  );
+const copyQQ = (): Promise<void> => copy(formatQQInvite());
 /** 打开聊天侧栏，让播放器继续可操作 */
 const chat = (): void => {
   room.chatOpen = true;
@@ -161,16 +218,14 @@ const chat = (): void => {
         <p class="mt-2 text-xs text-on-surface-variant">双方都可以选歌和控制播放</p>
       </div>
       <SInput v-model="invite" placeholder="粘贴邀请码，或 QQ／网易云一起听分享链接" />
-      <SButton :disabled="!invite.trim() || busy" @click="run(() => room.join(invite))">
-        加入一起听
-      </SButton>
-      <SButton variant="secondary" :disabled="busy" @click="run(() => hostNetease())">
+      <SButton :disabled="!invite.trim() || busy" @click="run(startJoin)">加入一起听</SButton>
+      <SButton variant="secondary" :disabled="busy" @click="run(startNetease)">
         创建网易云官方一起听
       </SButton>
       <p class="text-xs text-on-surface-variant">
         官方房间可与网易云 App 一起听，使用已登录的网易云账号和歌曲
       </p>
-      <SButton variant="secondary" :disabled="busy" @click="run(hostQQMusic)">
+      <SButton variant="secondary" :disabled="busy" @click="run(startQQMusic)">
         创建 QQ 音乐官方一起听
       </SButton>
       <p class="text-xs text-on-surface-variant">
@@ -182,13 +237,7 @@ const chat = (): void => {
         留空会优先使用 Tailscale 地址；手动填写只需本机 IPv4，不含协议或端口。异地双方需通过 VPN
         或房间服务互相连接。
       </p>
-      <SButton
-        variant="secondary"
-        :disabled="busy"
-        @click="run(() => room.host(address.trim() || undefined))"
-      >
-        创建一起听
-      </SButton>
+      <SButton variant="secondary" :disabled="busy" @click="run(startSelfHost)">创建一起听</SButton>
     </div>
     <p v-if="room.state.error || room.playbackError" class="mt-3 text-sm text-red-500">
       {{ room.playbackError || room.state.error }}

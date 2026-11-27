@@ -72,3 +72,42 @@ it("官方邀请复制完整文案和完整链接，页面提供电脑版打开�
   expect(wrapper.find("a").attributes("href")).toBe(url.href);
   wrapper.unmount();
 });
+it("创建自建房间后自动复制邀请码并关闭模态框，避免遮挡播放器操作", async () => {
+  const prevConnection = mocks.room.state.connection;
+  const prevMode = mocks.room.state.mode;
+  const host = vi.fn(async () => {
+    mocks.room.state.mode = "self" as never;
+    mocks.room.state.connection = "connected";
+    mocks.room.state.invite = "splayer-together:auto-copied";
+    return "splayer-together:auto-copied";
+  });
+  Object.assign(mocks.room, { host });
+  mocks.room.state.connection = "idle";
+  try {
+    const wrapper = mount(TogetherDialog, {
+      props: { open: true },
+      global: {
+        stubs: {
+          ...globals.stubs,
+          SInput: {
+            props: ["modelValue"],
+            template: '<input :value="modelValue" />',
+          },
+          SDivider: true,
+        },
+      },
+    });
+    await wrapper
+      .findAll("button")
+      .find((b) => b.text().trim() === "创建一起听")!
+      .trigger("click");
+    await flushPromises();
+    expect(host).toHaveBeenCalledOnce();
+    expect(mocks.write).toHaveBeenCalledWith("splayer-together:auto-copied");
+    expect(wrapper.emitted("update:open")?.at(-1)).toEqual([false]);
+    wrapper.unmount();
+  } finally {
+    mocks.room.state.connection = prevConnection;
+    mocks.room.state.mode = prevMode;
+  }
+});

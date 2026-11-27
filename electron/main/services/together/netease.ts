@@ -1,5 +1,6 @@
 import type {
   TogetherCommand,
+  TogetherInitialState,
   TogetherSnapshot,
   TogetherStatus,
   TogetherTrack,
@@ -116,10 +117,13 @@ export class NeteaseTogether {
     });
   }
 
-  /** 加入官方邀请或创建可被官方 App 加入的房间
+  /**
+   * 加入官方邀请或创建可被官方 App 加入的房间
    * @param invite - 已解析短链接后的官方地址，省略则建房
+   * @param initial - 建房时可选同步的初始网易云队列与播放状态
+   * @returns 房间初始化与首轮同步完成
    */
-  async start(invite?: string): Promise<void> {
+  async start(invite?: string, initial?: TogetherInitialState): Promise<void> {
     this.state("connecting");
     return this.enqueue(async () => {
       const current = await this.api("listentogether_status");
@@ -144,8 +148,66 @@ export class NeteaseTogether {
       if (this.stopped) return;
       if (!this.invite)
         this.invite = `https://st.music.163.com/listen-together/share/index.html?roomId=${encodeURIComponent(this.room.roomId)}&inviterId=${this.room.creatorId}`;
+      if (!invite && initial?.tracks.length) {
+        await this.seedInitial(initial);
+        if (this.stopped) return;
+      }
       await this.refresh();
       this.schedule();
+    });
+  }
+
+  /**
+   * 建房首轮查询前原子写入初始队列、进度与播放状态，避免暂停态歌曲短暂出声
+   * @param initial - 房主当前网易云队列与状态
+   */
+  private async seedInitial(initial: TogetherInitialState): Promise<void> {
+    const valid: TogetherTrack[] = [];
+    let mappedIndex = -1;
+    for (const [i, item] of initial.tracks.entries()) {
+      if (item.source !== "netease" || !/^[1-9]\d{0,19}$/.test(item.id)) continue;
+      if (i === initial.index) mappedIndex = valid.length;
+      valid.push(item);
+    }
+    if (!valid.length || mappedIndex < 0 || valid.length > 2000) return;
+    const chosen = valid[mappedIndex];
+    const mode =
+      initial.shuffleMode === "on"
+        ? "RANDOM"
+        : initial.repeatMode === "one"
+          ? "SINGLE_LOOP"
+          : "ORDER_LOOP";
+    const account = await this.api("user_account");
+    if (this.stopped) return;
+    const userId =
+      (account.profile as { userId?: number })?.userId ??
+      (account.account as { id?: number })?.id ??
+      this.room!.creatorId;
+    if (!userId) throw new Error("无法确认网易云账号");
+    await this.api("listentogether_sync_list_command", {
+      roomId: this.room!.roomId,
+      commandType: "REPLACE",
+      userId,
+      version: ++this.listVersion,
+      versions: this.versions,
+      playMode: mode,
+      displayList: valid.map((t) => t.id),
+      randomList: this.playOrder(valid, mode),
+    });
+    if (this.stopped) return;
+    const maxPos = chosen.duration ?? 0;
+    const position = Number.isFinite(initial.position)
+      ? Math.min(maxPos, Math.max(0, Math.round(initial.position!)))
+      : 0;
+    const status = initial.playing ? "PLAY" : "PAUSE";
+    await this.api("listentogether_play_command", {
+      roomId: this.room!.roomId,
+      commandType: status,
+      formerSongId: "-1",
+      targetSongId: chosen.id,
+      progress: position,
+      playStatus: status,
+      clientSeq: ++this.seq,
     });
   }
 
